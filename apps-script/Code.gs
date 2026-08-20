@@ -1,8 +1,12 @@
 /**
- * Trinity Rehab — Authorization Expiration & Low-Visit Notifier
+ * Trinity Rehab — Authorization Tracking Report
  *
  * Replaces manual offshore-team verification of authorization end dates
- * and remaining visit counts with a scheduled digest email.
+ * and remaining visit counts. Each run reads the latest raw per-auth
+ * export, applies the priority rule below, and writes a new dated section
+ * into ONE persistent Google Doc (CONFIG.TRACKING_DOC_ID) so there's a
+ * single place to open and see current + historical status — no jumping
+ * between spreadsheets. Optionally also emails the same digest.
  *
  * Trigger rule (visit count takes priority over date range, per request):
  *   1. PRIORITY 1 — remaining visits < VISIT_THRESHOLD (default 6)
@@ -20,18 +24,24 @@
  *   - Auth *start* date is unreliable (mass 8/4 go-live migration date) and
  *     is intentionally not used anywhere in this script.
  *
- * Source data lives in a SEPARATE spreadsheet from the one this script is
- * bound to — a periodically re-exported file named like
- * "Scrips_Auths - 08-20-26" (tab "Scripts Auths"), not a tab in this
- * workbook. Since the filename's date changes each export, this script
- * finds it by title prefix + most-recent-modified instead of a fixed file
- * ID (see SOURCE_FILE_TITLE_PREFIX / findSourceSpreadsheet()).
+ * Source data lives in a periodically re-exported spreadsheet named like
+ * "Scrips_Auths - 08-20-26" (tab "Scripts Auths"). Since the filename's
+ * date changes each export, this script finds it by title prefix +
+ * most-recent-modified instead of a fixed file ID.
  */
 
 // ---------------------------------------------------------------------------
 // CONFIG — edit these before running
 // ---------------------------------------------------------------------------
 var CONFIG = {
+  // The Google Doc this script writes into. Fixed ID because, unlike the
+  // Scrips_Auths export, this Doc is a stable, permanent artifact you keep
+  // reopening — create it once, put its ID here.
+  TRACKING_DOC_ID: '18_nrTmdQ1JQE88Wqajh0DsL-XL2_CombTwlMeGo8UVI',
+
+  // How many "Week of ..." sections to keep in the Doc before trimming the oldest.
+  MAX_WEEKS_KEPT: 12,
+
   // Drive is searched for the most recently modified spreadsheet whose
   // title starts with this prefix — matches "Scrips_Auths - 08-20-26", etc.
   SOURCE_FILE_TITLE_PREFIX: 'Scrips_Auths',
@@ -43,7 +53,8 @@ var CONFIG = {
   // (case-insensitive). Set to null to disable the filter.
   CASE_ACTIVE_VALUE: 'yes',
 
-  // Where the digest gets sent. Add the offshore team + local billing lead.
+  // Optional: also email the digest. Leave empty to skip email entirely
+  // and rely on the tracking Doc only.
   NOTIFY_EMAILS: [
     // 'offshore-team@example.com',
     // 'billing-lead@trinity-rehab.com',
@@ -55,13 +66,11 @@ var CONFIG = {
   // End dates that are known placeholders, not real expirations (MM/DD, any year).
   PLACEHOLDER_END_DATES: ['12/31'],
 
-  // Sheet tab (in THIS bound workbook) this script appends an audit trail to
-  // (created if missing).
-  LOG_SHEET_NAME: 'Auth Alerts Log',
-
   // If true, a run that finds zero alerts still sends a short "all clear" email.
   SEND_ON_EMPTY: false,
 };
+
+var INTRO_TITLE = 'Trinity Rehab — Authorization Tracking';
 
 // Header text this script looks for, matched case-insensitively as a
 // substring against the source sheet's header row. First match wins.
@@ -81,11 +90,12 @@ var HEADER_ALIASES = {
 };
 
 // ---------------------------------------------------------------------------
-// Entry point — wire this to a daily time-based trigger via installDailyTrigger()
+// Entry point — wire this to a weekly time-based trigger via installWeeklyTrigger()
 // ---------------------------------------------------------------------------
-function checkAuthorizations() {
-  var ss = SpreadsheetApp.getActiveSpreadsheet();
-  var sourceSheet = getSourceSheet();
+function updateAuthTrackingReport() {
+  var file = findSourceSpreadsheet();
+  var sourceSs = SpreadsheetApp.openById(file.getId());
+  var sourceSheet = sourceSs.getSheetByName(CONFIG.SOURCE_SHEET_NAME) || sourceSs.getSheets()[0];
 
   var data = sourceSheet.getDataRange().getValues();
   if (data.length < 2) return; // header only, nothing to do
@@ -104,17 +114,11 @@ function checkAuthorizations() {
 
   alerts.sort(compareAlerts);
 
+  updateTrackingDoc(alerts, today, file.getName());
+
   if (alerts.length > 0 || CONFIG.SEND_ON_EMPTY) {
     sendDigest(alerts, today);
   }
-  logAlerts(ss, alerts, today);
-}
-
-function getSourceSheet() {
-  var file = findSourceSpreadsheet();
-  var sourceSs = SpreadsheetApp.openById(file.getId());
-  var sheet = sourceSs.getSheetByName(CONFIG.SOURCE_SHEET_NAME) || sourceSs.getSheets()[0];
-  return sheet;
 }
 
 function findSourceSpreadsheet() {
@@ -211,22 +215,110 @@ function compareAlerts(a, b) {
 }
 
 // ---------------------------------------------------------------------------
-// Email digest
+// Tracking Doc
+// ---------------------------------------------------------------------------
+function updateTrackingDoc(alerts, today, sourceFileName) {
+  var doc = DocumentApp.openById(CONFIG.TRACKING_DOC_ID);
+  var body = doc.getBody();
+
+  ensureIntro(body);
+  insertWeekSection(body, alerts, today, sourceFileName);
+  trimOldWeeks(body, CONFIG.MAX_WEEKS_KEPT);
+
+  doc.saveAndClose();
+}
+
+function ensureIntro(body) {
+  var first = body.getNumChildren() > 0 ? body.getChild(0) : null;
+  var hasIntro = first &&
+    first.getType() === DocumentApp.ElementType.PARAGRAPH &&
+    first.asParagraph().getText().indexOf(INTRO_TITLE) === 0;
+  if (hasIntro) return;
+
+  body.clear();
+  body.appendParagraph(INTRO_TITLE).setHeading(DocumentApp.ParagraphHeading.TITLE);
+  body.appendParagraph(
+    'Auto-updated weekly. Visit count is the priority signal; auth end date ' +
+    'within ' + CONFIG.DAYS_THRESHOLD + ' days is the secondary factor. ' +
+    'Priority 1 = fewer than ' + CONFIG.VISIT_THRESHOLD + ' visits remaining. ' +
+    'Priority 2 = date-only, shown only when Priority 1 doesn\'t already apply.'
+  ).setItalic(true);
+}
+
+// Intro is always exactly 2 paragraphs (title + description), so new weekly
+// sections always get inserted starting right after them, at index 2.
+function insertWeekSection(body, alerts, today, sourceFileName) {
+  var critical = alerts.filter(function (a) { return a.priority === 1; });
+  var dateOnly = alerts.filter(function (a) { return a.priority === 2; });
+
+  var idx = 2;
+  body.insertParagraph(idx++, 'Week of ' + formatDate(today)).setHeading(DocumentApp.ParagraphHeading.HEADING2);
+  body.insertParagraph(idx++, 'Source: ' + sourceFileName + '  |  ' +
+    critical.length + ' low-visit, ' + dateOnly.length + ' expiring-soon').setItalic(true);
+
+  body.insertParagraph(idx++, 'Priority 1 — Low visits (fewer than ' + CONFIG.VISIT_THRESHOLD + ' remaining)')
+    .setHeading(DocumentApp.ParagraphHeading.HEADING3);
+  idx = insertAlertTable(body, idx, critical);
+
+  body.insertParagraph(idx++, 'Priority 2 — Expiring soon, visits OK (≤ ' + CONFIG.DAYS_THRESHOLD + ' days)')
+    .setHeading(DocumentApp.ParagraphHeading.HEADING3);
+  idx = insertAlertTable(body, idx, dateOnly);
+
+  body.insertParagraph(idx++, '──────────────────────────────');
+}
+
+function insertAlertTable(body, idx, list) {
+  if (list.length === 0) {
+    body.insertParagraph(idx, 'None.');
+    return idx + 1;
+  }
+  var values = [['Patient', 'Payer', 'Clinic', 'Reason']];
+  list.forEach(function (a) {
+    values.push([
+      a.patient + (a.account ? ' (' + a.account + ')' : ''),
+      a.payer || '',
+      a.clinic || '',
+      a.reasons.join('; '),
+    ]);
+  });
+  body.insertTable(idx, values);
+  return idx + 1;
+}
+
+function trimOldWeeks(body, maxWeeks) {
+  var headingIndices = [];
+  for (var i = 2; i < body.getNumChildren(); i++) {
+    var child = body.getChild(i);
+    if (child.getType() === DocumentApp.ElementType.PARAGRAPH) {
+      var p = child.asParagraph();
+      if (p.getHeading() === DocumentApp.ParagraphHeading.HEADING2 && p.getText().indexOf('Week of ') === 0) {
+        headingIndices.push(i);
+      }
+    }
+  }
+  if (headingIndices.length > maxWeeks) {
+    var cutoff = headingIndices[maxWeeks];
+    for (var j = body.getNumChildren() - 1; j >= cutoff; j--) {
+      body.removeChild(body.getChild(j));
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Optional email digest
 // ---------------------------------------------------------------------------
 function sendDigest(alerts, today) {
-  if (!CONFIG.NOTIFY_EMAILS || CONFIG.NOTIFY_EMAILS.length === 0) {
-    Logger.log('CONFIG.NOTIFY_EMAILS is empty — skipping send. Alerts found: ' + alerts.length);
-    return;
-  }
+  if (!CONFIG.NOTIFY_EMAILS || CONFIG.NOTIFY_EMAILS.length === 0) return;
 
   var critical = alerts.filter(function (a) { return a.priority === 1; });
   var dateOnly = alerts.filter(function (a) { return a.priority === 2; });
 
-  var subject = 'Auth alerts for ' + formatDate(today) + ': ' +
+  var subject = 'Auth tracking update for ' + formatDate(today) + ': ' +
     critical.length + ' low-visit, ' + dateOnly.length + ' expiring-soon';
 
   var lines = [];
-  lines.push('Automated authorization check — ' + formatDate(today));
+  lines.push('Weekly authorization check — ' + formatDate(today));
+  lines.push('Full history: https://docs.google.com/document/d/' + CONFIG.TRACKING_DOC_ID);
   lines.push('Rule: visit count takes priority over date range.');
   lines.push('  Priority 1: fewer than ' + CONFIG.VISIT_THRESHOLD + ' visits remaining');
   lines.push('  Priority 2: auth end date within ' + CONFIG.DAYS_THRESHOLD + ' days (only shown if not already Priority 1)');
@@ -241,13 +333,10 @@ function sendDigest(alerts, today) {
   if (dateOnly.length === 0) lines.push('None.');
   dateOnly.forEach(function (a) { lines.push(formatAlertLine(a)); });
 
-  var body = lines.join('\n');
-
   MailApp.sendEmail({
     to: CONFIG.NOTIFY_EMAILS.join(','),
     subject: subject,
-    body: body,
-    htmlBody: toHtml(subject, critical, dateOnly, today),
+    body: lines.join('\n'),
   });
 }
 
@@ -259,73 +348,22 @@ function formatAlertLine(a) {
     ' | ' + a.reasons.join('; ');
 }
 
-function toHtml(subject, critical, dateOnly, today) {
-  function rows(list) {
-    if (list.length === 0) return '<tr><td colspan="4"><em>None</em></td></tr>';
-    return list.map(function (a) {
-      return '<tr>' +
-        '<td>' + escapeHtml(a.patient) + (a.account ? ' (' + escapeHtml(a.account) + ')' : '') + '</td>' +
-        '<td>' + escapeHtml(a.payer || '') + '</td>' +
-        '<td>' + escapeHtml(a.clinic || '') + '</td>' +
-        '<td>' + escapeHtml(a.reasons.join('; ')) + '</td>' +
-        '</tr>';
-    }).join('');
-  }
-  return '<h3>' + escapeHtml(subject) + '</h3>' +
-    '<p>Rule: visit count takes priority over date range. Priority 1 = fewer than ' +
-    CONFIG.VISIT_THRESHOLD + ' visits remaining. Priority 2 = auth end date within ' +
-    CONFIG.DAYS_THRESHOLD + ' days (only when not already Priority 1).</p>' +
-    '<h4>Priority 1 — Low visits (' + critical.length + ')</h4>' +
-    '<table border="1" cellpadding="4" cellspacing="0"><tr><th>Patient</th><th>Payer</th><th>Clinic</th><th>Reason</th></tr>' +
-    rows(critical) + '</table>' +
-    '<h4>Priority 2 — Expiring soon, visits OK (' + dateOnly.length + ')</h4>' +
-    '<table border="1" cellpadding="4" cellspacing="0"><tr><th>Patient</th><th>Payer</th><th>Clinic</th><th>Reason</th></tr>' +
-    rows(dateOnly) + '</table>';
-}
-
-function escapeHtml(s) {
-  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-}
-
-// ---------------------------------------------------------------------------
-// Audit log
-// ---------------------------------------------------------------------------
-function logAlerts(ss, alerts, today) {
-  var sheet = ss.getSheetByName(CONFIG.LOG_SHEET_NAME);
-  if (!sheet) {
-    sheet = ss.insertSheet(CONFIG.LOG_SHEET_NAME);
-    sheet.appendRow(['Run date', 'Priority', 'Patient', 'Account', 'Payer', 'Clinic', 'Remaining visits', 'Days to end', 'Reason']);
-  }
-  alerts.forEach(function (a) {
-    sheet.appendRow([
-      formatDate(today),
-      a.priority === 1 ? 'Low visits' : 'Expiring soon',
-      a.patient,
-      a.account,
-      a.payer,
-      a.clinic,
-      a.remaining === null ? '' : a.remaining,
-      a.daysToEnd === null ? '' : a.daysToEnd,
-      a.reasons.join('; '),
-    ]);
-  });
-}
-
 // ---------------------------------------------------------------------------
 // Trigger management
 // ---------------------------------------------------------------------------
-function installDailyTrigger() {
+function installWeeklyTrigger() {
   removeTriggers();
-  ScriptApp.newTrigger('checkAuthorizations')
+  ScriptApp.newTrigger('updateAuthTrackingReport')
     .timeBased()
-    .everyDays(1)
+    .onWeekDay(ScriptApp.WeekDay.MONDAY)
     .atHour(7)
+    .everyWeeks(1)
     .create();
 }
 
 function removeTriggers() {
   ScriptApp.getProjectTriggers().forEach(function (t) {
-    if (t.getHandlerFunction() === 'checkAuthorizations') {
+    if (t.getHandlerFunction() === 'updateAuthTrackingReport') {
       ScriptApp.deleteTrigger(t);
     }
   });

@@ -1,8 +1,12 @@
-# Authorization Expiration & Low-Visit Notifications
+# Authorization Tracking Report (weekly)
 
 Automates the manual authorization check the offshore team currently does by
-hand against the [Authorization Analysis workbook](https://docs.google.com/spreadsheets/d/11uh4RFQcYxOeSAA1KIYSL_WzN88FfjW11Tpe1v00OGY).
-Sends a daily digest email flagging authorizations that need action.
+hand. Each week the script reads the latest raw authorization export, applies
+the priority rule below, and writes a new dated section into one persistent
+tracking Doc — **[Trinity Rehab - Authorization Tracking Report](https://docs.google.com/document/d/18_nrTmdQ1JQE88Wqajh0DsL-XL2_CombTwlMeGo8UVI)** —
+so there's a single place to open, with this week's status plus history,
+instead of juggling separate spreadsheets. It can optionally also email the
+same digest.
 
 ## Rule
 
@@ -15,12 +19,13 @@ Sends a daily digest email flagging authorizations that need action.
    flagged for low visits — an auth that's already low on visits doesn't need
    a second, lower-priority reason attached.
 
-This matches what the workbook's own payer-level analysis found: for Clover
-Health, Braven Health, and BCBS/Horizon commercial, visits run out long
-before the end date (median "dead calendar" of 55–147 days), so a date-only
-alert would fire far too late for those payers. For Workers Comp, Auto/PIP,
-and Humana it's the reverse — the date runs out first — which is why the
-date leg is kept as a real, independent trigger rather than dropped.
+This matches what the [source analysis workbook](https://docs.google.com/spreadsheets/d/11uh4RFQcYxOeSAA1KIYSL_WzN88FfjW11Tpe1v00OGY)'s
+own payer-level breakdown found: for Clover Health, Braven Health, and
+BCBS/Horizon commercial, visits run out long before the end date (median
+"dead calendar" of 55–147 days), so a date-only alert would fire far too
+late for those payers. For Workers Comp, Auto/PIP, and Humana it's the
+reverse — the date runs out first — which is why the date leg is kept as a
+real, independent trigger rather than dropped.
 
 ## Known data-quality caveats (from the workbook's "what to fix" tab)
 
@@ -44,33 +49,51 @@ Provider/Payer, Location of Last Visit, Case Therapist, Date of Next Visit,
 Scheduled Through, Phone, Fax, Email, Internal Notes, Case Active`.
 
 Because each export creates a new dated file rather than overwriting one
-stable file, the script does **not** use a fixed file ID. `findSourceSpreadsheet()`
-searches Drive for the most recently modified spreadsheet whose title starts
-with `CONFIG.SOURCE_FILE_TITLE_PREFIX` (default `'Scrips_Auths'`) and opens
-that. It also filters to `Case Active = "Yes"` (`CONFIG.CASE_ACTIVE_VALUE`)
-so closed/discharged cases don't show up in the digest.
+stable file, the script does **not** use a fixed file ID for it.
+`findSourceSpreadsheet()` searches Drive for the most recently modified
+spreadsheet whose title starts with `CONFIG.SOURCE_FILE_TITLE_PREFIX`
+(default `'Scrips_Auths'`) and opens that. It also filters to
+`Case Active = "Yes"` (`CONFIG.CASE_ACTIVE_VALUE`) so closed/discharged
+cases don't show up.
+
+## Where the output goes
+
+Unlike the source data, the **tracking Doc is a fixed, permanent file** —
+created once, and referenced by ID (`CONFIG.TRACKING_DOC_ID`) so every run
+updates the same Doc rather than creating new ones. Each run:
+
+1. Ensures the Doc has its title/description intro (only rebuilt if missing).
+2. Inserts a new `Week of MM/DD/YYYY` section right after the intro, with a
+   Priority 1 table and a Priority 2 table (newest week always on top).
+3. Trims sections beyond `CONFIG.MAX_WEEKS_KEPT` (default 12) so the Doc
+   doesn't grow forever.
+
+If `CONFIG.NOTIFY_EMAILS` has addresses in it, the same digest is also
+emailed with a link back to the Doc. Leave it empty to rely on the Doc only.
 
 ## Setup
 
 1. Open the analysis spreadsheet → **Extensions → Apps Script**. (The
-   script is bound to this workbook — it just *reads* the Scrips_Auths file
-   from Drive rather than living in it, so it survives that file being
-   re-exported under a new name.)
+   script just needs to run *somewhere* — it doesn't read or write that
+   spreadsheet anymore, it only reads the Scrips_Auths export and writes to
+   the tracking Doc. Binding it here is just a convenient home; a standalone
+   Apps Script project at script.google.com works identically.)
 2. Create/replace `Code.gs` and `appsscript.json` with the files in
    `apps-script/` in this repo (or `clasp push` if the project is clasp-linked).
 3. In `Code.gs`, edit the `CONFIG` block:
+   - `TRACKING_DOC_ID`: already set to the Doc created for this — change it
+     only if you want output going to a different Doc.
    - `SOURCE_FILE_TITLE_PREFIX` / `SOURCE_SHEET_NAME`: adjust if the export
      file/tab naming ever changes.
-   - `NOTIFY_EMAILS`: who gets the digest (offshore team, billing lead, etc).
-   - Adjust `VISIT_THRESHOLD` / `DAYS_THRESHOLD` if 6 visits / 7 days ever
-     need to change.
-4. Run `installDailyTrigger` once (from the Apps Script editor, or
-   `clasp run installDailyTrigger`) to schedule a 7am daily check. Authorize
-   the requested Gmail/Sheets/Drive scopes when prompted — Drive read access
-   is new as of this version, needed to locate the latest Scrips_Auths export.
-5. Each run also appends every alert to an **Auth Alerts Log** tab in the
-   analysis workbook (auto-created) so there's an audit trail of what fired
-   and when.
+   - `NOTIFY_EMAILS`: optional — add addresses to also get an email digest.
+   - Adjust `VISIT_THRESHOLD` / `DAYS_THRESHOLD` / `MAX_WEEKS_KEPT` if those
+     ever need to change.
+4. Run `installWeeklyTrigger` once (from the Apps Script editor, or
+   `clasp run installWeeklyTrigger`) to schedule it for Mondays at 7am.
+   Authorize the requested Docs/Drive/Sheets (and Gmail, if emailing) scopes
+   when prompted.
 
-To change the schedule, edit `installDailyTrigger()` in `Code.gs` and re-run
-it (it clears any existing trigger for `checkAuthorizations` first).
+To change the schedule, edit `installWeeklyTrigger()` in `Code.gs` and
+re-run it (it clears any existing trigger for `updateAuthTrackingReport`
+first). To test immediately instead of waiting for Monday, just run
+`updateAuthTrackingReport` directly from the function dropdown.
