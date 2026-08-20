@@ -56,6 +56,17 @@ spreadsheet whose title starts with `CONFIG.SOURCE_FILE_TITLE_PREFIX`
 `Case Active = "Yes"` (`CONFIG.CASE_ACTIVE_VALUE`) so closed/discharged
 cases don't show up.
 
+Note the analysis workbook is **not** an independent data source — its own
+header says so directly: *"Source: Scrips_Auths 08-20-26 (Prompt)"*. It's a
+derived snapshot of the same Scrips_Auths data, not separate records, so the
+script only reads Scrips_Auths for per-auth rows. What it *does* pull from
+the workbook is its payer categorization: `PAYER_GROUP_RULES` in `Code.gs`
+reapplies the same prefix/substring rules the workbook used to bucket raw
+`Provider/Payer` text (`"Bcbs 52 (Nj)"`, `"Wc-Streamline"`, `"Nf-Geico"`,
+etc.) into clean groups (BCBS / Horizon commercial, Workers Comp, Auto /
+PIP, Clover Health, Braven Health, Humana), so the tracking Doc reads the
+same way the workbook does instead of showing raw entered text.
+
 ## Where the output goes
 
 Unlike the source data, the **tracking Doc is a fixed, permanent file** —

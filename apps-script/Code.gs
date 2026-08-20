@@ -72,6 +72,34 @@ var CONFIG = {
 
 var INTRO_TITLE = 'Trinity Rehab — Authorization Tracking';
 
+// Payer categorization pulled from the analysis workbook's own bucketing
+// (Trinity_Auth_Window_Analysis_0820 — Payer group column), reapplied here
+// as prefix/substring rules against the raw "Provider/Payer" free text in
+// Scrips_Auths (e.g. "Bcbs 52 (Nj)", "Wc-Streamline", "Nf-Geico") so the
+// tracking Doc reads the same clean groups the workbook uses instead of
+// the raw entered text. Order matters — first match wins. Falls back to
+// the raw payer text unchanged if nothing matches.
+var PAYER_GROUP_RULES = [
+  { match: 'clover', group: 'Clover Health (Medicare Advantage)' },
+  { match: 'braven', group: 'Braven Health (BCBS Medicare Advantage)' },
+  { match: 'humana', group: 'Humana' },
+  { match: 'wc-', group: 'Workers Comp' },
+  { match: 'workers comp', group: 'Workers Comp' },
+  { match: 'nf-', group: 'Auto / PIP' },
+  { match: 'bcbs', group: 'BCBS / Horizon commercial' },
+  { match: 'horizon', group: 'BCBS / Horizon commercial' },
+];
+
+function normalizePayer(rawPayer) {
+  var raw = String(rawPayer || '').trim();
+  if (!raw) return raw;
+  var lower = raw.toLowerCase();
+  for (var i = 0; i < PAYER_GROUP_RULES.length; i++) {
+    if (lower.indexOf(PAYER_GROUP_RULES[i].match) !== -1) return PAYER_GROUP_RULES[i].group;
+  }
+  return raw; // unrecognized payer — show as entered rather than guessing
+}
+
 // Header text this script looks for, matched case-insensitively as a
 // substring against the source sheet's header row. First match wins.
 // Order matters where headers overlap (e.g. "Patient Account #" vs
@@ -150,7 +178,7 @@ function evaluateRow(row, col, today) {
     if (activeVal !== CONFIG.CASE_ACTIVE_VALUE.toLowerCase()) return null;
   }
 
-  var payer = col.payer >= 0 ? row[col.payer] : '';
+  var payer = normalizePayer(col.payer >= 0 ? row[col.payer] : '');
   var account = col.account >= 0 ? row[col.account] : '';
   var clinic = col.clinic >= 0 ? row[col.clinic] : '';
 
