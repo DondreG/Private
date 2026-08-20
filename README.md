@@ -32,24 +32,45 @@ date leg is kept as a real, independent trigger rather than dropped.
 - Fix these upstream in Prompt/Scrips_Auths when possible; the placeholder
   workaround here is a stopgap, not a substitute.
 
+## Where the data comes from
+
+The raw per-authorization rows are **not** a tab in the analysis workbook —
+they live in a separate, periodically re-exported spreadsheet named like
+`Scrips_Auths - 08-20-26` (tab `Scripts Auths`), with columns: `Patient
+Account #, Patient First, Patient Last, Case Name, Script or Auth, Start
+Date, End Date, Script Reference, Auth Mode, Total Visits, Arrived Visits,
+Remaining Visits, Visits Scheduled, Scheduled Visits Remaining,
+Provider/Payer, Location of Last Visit, Case Therapist, Date of Next Visit,
+Scheduled Through, Phone, Fax, Email, Internal Notes, Case Active`.
+
+Because each export creates a new dated file rather than overwriting one
+stable file, the script does **not** use a fixed file ID. `findSourceSpreadsheet()`
+searches Drive for the most recently modified spreadsheet whose title starts
+with `CONFIG.SOURCE_FILE_TITLE_PREFIX` (default `'Scrips_Auths'`) and opens
+that. It also filters to `Case Active = "Yes"` (`CONFIG.CASE_ACTIVE_VALUE`)
+so closed/discharged cases don't show up in the digest.
+
 ## Setup
 
-1. Open the spreadsheet → **Extensions → Apps Script**.
+1. Open the analysis spreadsheet → **Extensions → Apps Script**. (The
+   script is bound to this workbook — it just *reads* the Scrips_Auths file
+   from Drive rather than living in it, so it survives that file being
+   re-exported under a new name.)
 2. Create/replace `Code.gs` and `appsscript.json` with the files in
    `apps-script/` in this repo (or `clasp push` if the project is clasp-linked).
 3. In `Code.gs`, edit the `CONFIG` block:
-   - `SOURCE_SHEET_NAME`: the tab with one row per authorization (headers
-     for patient, payer, auth end date, and either a remaining-visits column
-     or total + arrived visit columns — column matching is by header text,
-     see `HEADER_ALIASES`, so exact column order doesn't matter).
+   - `SOURCE_FILE_TITLE_PREFIX` / `SOURCE_SHEET_NAME`: adjust if the export
+     file/tab naming ever changes.
    - `NOTIFY_EMAILS`: who gets the digest (offshore team, billing lead, etc).
    - Adjust `VISIT_THRESHOLD` / `DAYS_THRESHOLD` if 6 visits / 7 days ever
      need to change.
 4. Run `installDailyTrigger` once (from the Apps Script editor, or
    `clasp run installDailyTrigger`) to schedule a 7am daily check. Authorize
-   the requested Gmail/Sheets scopes when prompted.
-5. Each run also appends every alert to an **Auth Alerts Log** tab
-   (auto-created) so there's an audit trail of what fired and when.
+   the requested Gmail/Sheets/Drive scopes when prompted — Drive read access
+   is new as of this version, needed to locate the latest Scrips_Auths export.
+5. Each run also appends every alert to an **Auth Alerts Log** tab in the
+   analysis workbook (auto-created) so there's an audit trail of what fired
+   and when.
 
 To change the schedule, edit `installDailyTrigger()` in `Code.gs` and re-run
 it (it clears any existing trigger for `checkAuthorizations` first).

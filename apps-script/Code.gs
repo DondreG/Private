@@ -19,15 +19,29 @@
  *     date leg of the rule (the visit leg still applies normally).
  *   - Auth *start* date is unreliable (mass 8/4 go-live migration date) and
  *     is intentionally not used anywhere in this script.
+ *
+ * Source data lives in a SEPARATE spreadsheet from the one this script is
+ * bound to — a periodically re-exported file named like
+ * "Scrips_Auths - 08-20-26" (tab "Scripts Auths"), not a tab in this
+ * workbook. Since the filename's date changes each export, this script
+ * finds it by title prefix + most-recent-modified instead of a fixed file
+ * ID (see SOURCE_FILE_TITLE_PREFIX / findSourceSpreadsheet()).
  */
 
 // ---------------------------------------------------------------------------
 // CONFIG — edit these before running
 // ---------------------------------------------------------------------------
 var CONFIG = {
-  // Name of the tab holding one row per authorization (raw Scrips_Auths
-  // export, or an equivalent per-auth tab). Must have a header row.
-  SOURCE_SHEET_NAME: 'Scrips_Auths',
+  // Drive is searched for the most recently modified spreadsheet whose
+  // title starts with this prefix — matches "Scrips_Auths - 08-20-26", etc.
+  SOURCE_FILE_TITLE_PREFIX: 'Scrips_Auths',
+
+  // Tab name within that file. Falls back to the first sheet if not found.
+  SOURCE_SHEET_NAME: 'Scripts Auths',
+
+  // Only alert on rows where the "Case Active" column is this value
+  // (case-insensitive). Set to null to disable the filter.
+  CASE_ACTIVE_VALUE: 'yes',
 
   // Where the digest gets sent. Add the offshore team + local billing lead.
   NOTIFY_EMAILS: [
@@ -41,7 +55,8 @@ var CONFIG = {
   // End dates that are known placeholders, not real expirations (MM/DD, any year).
   PLACEHOLDER_END_DATES: ['12/31'],
 
-  // Sheet tab this script appends an audit trail to (created if missing).
+  // Sheet tab (in THIS bound workbook) this script appends an audit trail to
+  // (created if missing).
   LOG_SHEET_NAME: 'Auth Alerts Log',
 
   // If true, a run that finds zero alerts still sends a short "all clear" email.
@@ -50,15 +65,19 @@ var CONFIG = {
 
 // Header text this script looks for, matched case-insensitively as a
 // substring against the source sheet's header row. First match wins.
+// Order matters where headers overlap (e.g. "Patient Account #" vs
+// "Patient First" both contain "patient" — explicit column names avoid that).
 var HEADER_ALIASES = {
-  patient: ['patient'],
-  account: ['account #', 'account'],
-  payer: ['payer group', 'payer'],
-  authEnd: ['auth end', 'end date'],
-  totalVisits: ['total visits', 'visits authorized', 'auths'],
-  arrivedVisits: ['arrived'],
-  remainingVisits: ['remaining', 'visits left'],
-  clinic: ['clinic'],
+  patientFirst: ['patient first'],
+  patientLast: ['patient last'],
+  account: ['patient account #', 'account #'],
+  payer: ['provider/payer', 'payer group', 'payer'],
+  authEnd: ['end date'],
+  totalVisits: ['total visits'],
+  arrivedVisits: ['arrived visits'],
+  remainingVisits: ['remaining visits', 'visits left'],
+  clinic: ['clinic', 'location of last visit'],
+  caseActive: ['case active'],
 };
 
 // ---------------------------------------------------------------------------
@@ -66,11 +85,7 @@ var HEADER_ALIASES = {
 // ---------------------------------------------------------------------------
 function checkAuthorizations() {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
-  var sourceSheet = ss.getSheetByName(CONFIG.SOURCE_SHEET_NAME);
-  if (!sourceSheet) {
-    throw new Error('Source sheet "' + CONFIG.SOURCE_SHEET_NAME + '" not found. ' +
-      'Update CONFIG.SOURCE_SHEET_NAME to match your raw authorizations tab.');
-  }
+  var sourceSheet = getSourceSheet();
 
   var data = sourceSheet.getDataRange().getValues();
   if (data.length < 2) return; // header only, nothing to do
@@ -95,9 +110,41 @@ function checkAuthorizations() {
   logAlerts(ss, alerts, today);
 }
 
+function getSourceSheet() {
+  var file = findSourceSpreadsheet();
+  var sourceSs = SpreadsheetApp.openById(file.getId());
+  var sheet = sourceSs.getSheetByName(CONFIG.SOURCE_SHEET_NAME) || sourceSs.getSheets()[0];
+  return sheet;
+}
+
+function findSourceSpreadsheet() {
+  var files = DriveApp.searchFiles(
+    "title contains '" + CONFIG.SOURCE_FILE_TITLE_PREFIX.replace(/'/g, "\\'") + "'" +
+    " and mimeType = 'application/vnd.google-apps.spreadsheet' and trashed = false"
+  );
+  var newest = null;
+  while (files.hasNext()) {
+    var f = files.next();
+    if (f.getName().indexOf(CONFIG.SOURCE_FILE_TITLE_PREFIX) !== 0) continue; // prefix, not just contains
+    if (!newest || f.getLastUpdated() > newest.getLastUpdated()) newest = f;
+  }
+  if (!newest) {
+    throw new Error('No spreadsheet found in Drive titled starting with "' +
+      CONFIG.SOURCE_FILE_TITLE_PREFIX + '". Update CONFIG.SOURCE_FILE_TITLE_PREFIX.');
+  }
+  return newest;
+}
+
 function evaluateRow(row, col, today) {
-  var patient = col.patient >= 0 ? row[col.patient] : '';
+  var first = col.patientFirst >= 0 ? row[col.patientFirst] : '';
+  var last = col.patientLast >= 0 ? row[col.patientLast] : '';
+  var patient = (String(first || '') + ' ' + String(last || '')).trim();
   if (!patient) return null; // blank row
+
+  if (CONFIG.CASE_ACTIVE_VALUE && col.caseActive >= 0) {
+    var activeVal = String(row[col.caseActive] || '').trim().toLowerCase();
+    if (activeVal !== CONFIG.CASE_ACTIVE_VALUE.toLowerCase()) return null;
+  }
 
   var payer = col.payer >= 0 ? row[col.payer] : '';
   var account = col.account >= 0 ? row[col.account] : '';
