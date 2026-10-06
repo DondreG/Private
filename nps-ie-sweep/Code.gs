@@ -1,25 +1,30 @@
 /**
  * Trinity Rehab — NPS "IE Scheduled Out" Sweep
  *
- * Sweeps the monthly New Patient Spreadsheet (NPS) for patients who CALLED
- * during a given week but whose initial evaluation (FS/IE Date) wasn't
- * booked until a LATER week — i.e. called this week, not seen until next
- * week or beyond. Those are the patients worth reviewing for an earlier
- * slot.
+ * Sweeps the monthly New Patient Spreadsheet (NPS) for patients whose
+ * initial evaluation (FS/IE Date) was booked in a LATER week than the week
+ * they called — i.e. called this week, not seen until next week or beyond.
+ * Those are the patients worth reviewing for an earlier slot.
+ *
+ * Two views, one tab per week each:
+ *   - "Week of 10-04-26"     CALL week: called Sun–Sat, IE after Saturday.
+ *   - "IEs Week of 10-11-26" IE week: IE booked Sun–Sat, but the patient
+ *                            called in an earlier week (who's coming in
+ *                            that week who could have been seen sooner).
  *
  * Source: the NPS is one Google Sheet per month, named like
  * "October 2026 New Patient Spreadsheet" (older months: "March 2026 NPS").
  * Every clinic tab (BR, SHRW, MAN, ... Warren) has the same layout — a
  * header row with "Date" (call date), "Patient Name", "FS/IE Date", etc.
  * Tabs without that header (CONSOLIDATED, DIGITAL TRACKING, DDB, ELLAAGENT)
- * are skipped automatically. Because a week can straddle two months
- * (e.g. Sun 9/27 – Sat 10/3), the script opens every monthly NPS the week
- * touches, found by title — no file IDs to update each month.
+ * are skipped automatically. Each sweep opens every monthly NPS its date
+ * range touches, found by title — no file IDs to update each month.
  *
- * Output: ONE persistent spreadsheet with a tab per week ("Week of
- * 10-05-26"), newest first. Each run rebuilds the current week's and the
- * previous week's tabs (so late data entry gets picked up), while keeping
- * whatever the team typed into the Follow-up / Follow-up Notes columns.
+ * Output: ONE persistent spreadsheet. Each daily run rebuilds the call-week
+ * tabs for last week, this week and next week, and the IE-week tab for next
+ * week, so every week rolls forward on its own. Whatever the team typed in
+ * Follow-up / Follow-up Notes is kept; a row with follow-up that drops off
+ * the sweep (e.g. IE moved up) stays on the tab, marked resolved.
  */
 
 // ---------------------------------------------------------------------------
@@ -65,7 +70,11 @@ var CONFIG = {
   // Set to [] to include everything.
   EXCLUDE_STATUSES: ['Inactive'],
 
-  // How many weekly tabs to keep in the output before deleting the oldest.
+  // How far back the IE-week view looks for the original call. Calls older
+  // than this many days before the IE week are not included.
+  IE_LOOKBACK_DAYS: 60,
+
+  // How many weekly tabs of each kind to keep before deleting the oldest.
   MAX_WEEKS_KEPT: 12,
 
   // Choices offered in the Follow-up dropdown.
@@ -88,49 +97,76 @@ var CONFIG = {
 };
 
 var OUTPUT_ID_PROPERTY = 'NPS_IE_SWEEP_OUTPUT_ID';
-var TAB_PREFIX = 'Week of ';
 var TABLE_HEADER_ROW = 4;
 var OUTPUT_HEADERS = [
   'Clinic', 'Call Date', 'Patient Name', 'Taken By', 'Referral Source',
   'Diagnosis', 'Primary Insurance', 'FS/IE Date', 'Days Call → IE',
-  'Days Past Week End', 'Status', 'NPS Notes', 'Source', 'Follow-up',
+  'Days Past Call Week', 'Status', 'NPS Notes', 'Source', 'Follow-up',
   'Follow-up Notes',
 ];
+var STATUS_COL = OUTPUT_HEADERS.indexOf('Status') + 1;
+var SOURCE_COL = OUTPUT_HEADERS.indexOf('Source') + 1;
 // Columns the team fills in — preserved across re-runs.
 var FOLLOW_UP_COL = OUTPUT_HEADERS.indexOf('Follow-up') + 1;
 var FOLLOW_UP_NOTES_COL = OUTPUT_HEADERS.indexOf('Follow-up Notes') + 1;
+var RESOLVED_STATUS = 'No longer scheduled out (IE date or status changed)';
 var MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June', 'July',
   'August', 'September', 'October', 'November', 'December'];
+
+// The two kinds of weekly tab. IE-week tabs sort ahead of call-week tabs.
+var VIEWS = {
+  CALLS: {
+    prefix: 'Week of ',
+    order: 1,
+    title: function (range) { return 'Called ' + range + ' — IE scheduled after the week'; },
+    empty: 'No patients scheduled out for this week.',
+  },
+  IES: {
+    prefix: 'IEs Week of ',
+    order: 0,
+    title: function (range) { return 'IE booked ' + range + ' — patient called in an earlier week'; },
+    empty: 'No IEs this week from patients who called in an earlier week.',
+  },
+};
 
 // ---------------------------------------------------------------------------
 // Entry points
 // ---------------------------------------------------------------------------
 
-/** Daily job: refresh this week's and last week's tabs. */
+/**
+ * Daily job: call-week tabs for last, this and next week, plus the IE-week
+ * tab for next week.
+ */
 function runSweep() {
-  var today = new Date();
-  var thisWeek = weekRange(today);
+  var thisWeek = weekRange(new Date());
   var lastWeek = weekRange(addDays(thisWeek.start, -7));
+  var nextWeek = weekRange(addDays(thisWeek.start, 7));
   var output = getOutputSpreadsheet();
+  var cache = {};
 
-  var results = [lastWeek, thisWeek].map(function (week) {
-    var rows = sweepWeek(week);
-    writeWeekTab(output, week, rows);
-    return { week: week, rows: rows };
+  var results = [lastWeek, thisWeek, nextWeek].map(function (week) {
+    var rows = sweepCallWeek(week, cache);
+    writeWeekTab(output, VIEWS.CALLS, week, rows);
+    return { view: VIEWS.CALLS, week: week, rows: rows };
   });
+  var ieRows = sweepIeWeek(nextWeek, cache);
+  writeWeekTab(output, VIEWS.IES, nextWeek, ieRows);
+  results.unshift({ view: VIEWS.IES, week: nextWeek, rows: ieRows });
 
   trimOldTabs(output);
   notify(output, results);
 }
 
 /**
- * Manual helper: sweep the week containing a specific date, e.g.
- * sweepWeekContaining('2026-09-30'). Handy for back-filling past weeks.
+ * Manual helper: build both tabs for the week containing a specific date,
+ * e.g. sweepWeekContaining('2026-09-30'). Handy for back-filling past weeks.
  */
 function sweepWeekContaining(isoDate) {
   var week = weekRange(parseIsoDate(isoDate));
   var output = getOutputSpreadsheet();
-  writeWeekTab(output, week, sweepWeek(week));
+  var cache = {};
+  writeWeekTab(output, VIEWS.CALLS, week, sweepCallWeek(week, cache));
+  writeWeekTab(output, VIEWS.IES, week, sweepIeWeek(week, cache));
   trimOldTabs(output);
 }
 
@@ -146,22 +182,37 @@ function installDailyTrigger() {
 // Sweep
 // ---------------------------------------------------------------------------
 
+/** Patients who called within `week` and whose IE is after the week. */
+function sweepCallWeek(week, cache) {
+  return sweep(week.start, week.end, cache, function (values, tz) {
+    return extractScheduledOut(values, week, tz);
+  });
+}
+
 /**
- * Returns every patient who called within `week` and whose FS/IE Date is
- * after the week's last day, across all monthly NPS files the week touches.
+ * Patients whose IE falls within `week` but who called in an earlier week.
+ * Calls up to CONFIG.IE_LOOKBACK_DAYS before the week are considered.
  */
-function sweepWeek(week) {
+function sweepIeWeek(week, cache) {
+  return sweep(addDays(week.start, -CONFIG.IE_LOOKBACK_DAYS), week.end, cache, function (values, tz) {
+    return extractLandingInWeek(values, week, tz);
+  });
+}
+
+/**
+ * Runs `extract` over every clinic tab of every monthly NPS between `from`
+ * and `to`, dedupes by clinic + patient + call date, and sorts the result.
+ */
+function sweep(from, to, cache, extract) {
   var byKey = {};
-  findNpsFilesForWeek(week).forEach(function (file) {
-    var ss = SpreadsheetApp.openById(file.getId());
-    var tz = ss.getSpreadsheetTimeZone();
-    ss.getSheets().forEach(function (sheet) {
-      var values = sheet.getDataRange().getValues();
-      var rows = extractScheduledOut(values, week, tz);
-      rows.forEach(function (r) {
-        r.clinicTab = sheet.getName();
-        r.clinic = clinicName(values, sheet.getName());
-        r.sourceUrl = ss.getUrl() + '#gid=' + sheet.getSheetId() + '&range=A' + r.rowNumber;
+  monthsBetween(from, to).forEach(function (month) {
+    var nps = loadNps(month, cache);
+    if (!nps) return;
+    nps.tabs.forEach(function (tab) {
+      extract(tab.values, nps.tz).forEach(function (r) {
+        r.clinicTab = tab.name;
+        r.clinic = clinicName(tab.values, tab.name);
+        r.sourceUrl = nps.url + '#gid=' + tab.gid + '&range=A' + r.rowNumber;
         // Later months overwrite earlier ones if a patient was carried over.
         byKey[rowKey(r.clinic, r.patient, r.callDate)] = r;
       });
@@ -174,19 +225,66 @@ function sweepWeek(week) {
   });
 }
 
+/** Reads one month's NPS once per run: { url, tz, tabs: [{ name, gid, values }] }. */
+function loadNps(month, cache) {
+  var key = month.getFullYear() + '-' + month.getMonth();
+  if (key in cache) return cache[key];
+
+  var file = findNpsFile(MONTH_NAMES[month.getMonth()], String(month.getFullYear()));
+  if (!file) {
+    Logger.log('No NPS found for ' + MONTH_NAMES[month.getMonth()] + ' ' + month.getFullYear());
+    return (cache[key] = null);
+  }
+  var ss = SpreadsheetApp.openById(file.getId());
+  return (cache[key] = {
+    url: ss.getUrl(),
+    tz: ss.getSpreadsheetTimeZone(),
+    tabs: ss.getSheets().map(function (sheet) {
+      return { name: sheet.getName(), gid: sheet.getSheetId(), values: sheet.getDataRange().getValues() };
+    }),
+  });
+}
+
+/** First day of each month from `from`'s month through `to`'s month. */
+function monthsBetween(from, to) {
+  var months = [];
+  var m = new Date(from.getFullYear(), from.getMonth(), 1);
+  while (m <= to) {
+    months.push(m);
+    m = new Date(m.getFullYear(), m.getMonth() + 1, 1);
+  }
+  return months;
+}
+
+/** Call-week view: called inside `week`, IE after the week's last day. */
+function extractScheduledOut(values, week, tz) {
+  var weekStart = isoKey(week.start, Session.getScriptTimeZone());
+  var weekEnd = isoKey(week.end, Session.getScriptTimeZone());
+  return extractRows(values, tz, function (callDate, ieDate) {
+    return callDate >= weekStart && callDate <= weekEnd && ieDate > weekEnd;
+  });
+}
+
+/** IE-week view: IE inside `week`, called before the week started. */
+function extractLandingInWeek(values, week, tz) {
+  var weekStart = isoKey(week.start, Session.getScriptTimeZone());
+  var weekEnd = isoKey(week.end, Session.getScriptTimeZone());
+  return extractRows(values, tz, function (callDate, ieDate) {
+    return ieDate >= weekStart && ieDate <= weekEnd && callDate < weekStart;
+  });
+}
+
 /**
  * Pure filter over one clinic tab's values (2-D array from getValues()).
  * Dates are compared as 'yyyy-MM-dd' strings in the source sheet's time
- * zone so a midnight timestamp can never slip into the wrong day.
- * Returns [] for tabs that aren't clinic tabs.
+ * zone so a midnight timestamp can never slip into the wrong day. Rows
+ * need a patient, a call date and an IE date, and a status not in
+ * CONFIG.EXCLUDE_STATUSES. Returns [] for tabs that aren't clinic tabs.
  */
-function extractScheduledOut(values, week, tz) {
+function extractRows(values, tz, matches) {
   var h = findHeader(values);
   if (!h) return [];
 
-  // Week bounds in the script's zone; cell dates in the source sheet's zone.
-  var weekStart = isoKey(week.start, Session.getScriptTimeZone());
-  var weekEnd = isoKey(week.end, Session.getScriptTimeZone());
   var excluded = CONFIG.EXCLUDE_STATUSES.map(function (s) { return s.toLowerCase(); });
   var out = [];
 
@@ -196,10 +294,8 @@ function extractScheduledOut(values, week, tz) {
     if (!patient) continue;
 
     var callDate = toIsoKey(row[h.cols.CALL_DATE], tz);
-    if (!callDate || callDate < weekStart || callDate > weekEnd) continue;
-
     var ieDate = toIsoKey(row[h.cols.IE_DATE], tz);
-    if (!ieDate || ieDate <= weekEnd) continue;
+    if (!callDate || !ieDate || !matches(callDate, ieDate)) continue;
 
     var status = cell(row, h.cols.STATUS);
     if (excluded.indexOf(status.toLowerCase()) !== -1) continue;
@@ -216,10 +312,15 @@ function extractScheduledOut(values, week, tz) {
       notes: cell(row, h.cols.NOTES),
       status: status,
       daysCallToIe: diffIsoDays(callDate, ieDate),
-      daysPastWeekEnd: diffIsoDays(weekEnd, ieDate),
+      daysPastCallWeek: diffIsoDays(callWeekEnd(callDate), ieDate),
     });
   }
   return out;
+}
+
+/** Last day ('yyyy-MM-dd') of the week a call date falls in. */
+function callWeekEnd(callIso) {
+  return isoKey(weekRange(parseIsoDate(callIso)).end, Session.getScriptTimeZone());
 }
 
 /** Locates the header row and the column index of each CONFIG.HEADERS entry. */
@@ -243,25 +344,6 @@ function findHeader(values) {
 function clinicName(values, tabName) {
   var title = values.length > 1 ? String(values[1][0] || '').trim() : '';
   return title || tabName;
-}
-
-/** Monthly NPS spreadsheets covering the week's start and end months. */
-function findNpsFilesForWeek(week) {
-  var months = [week.start, week.end].map(function (d) {
-    return { month: MONTH_NAMES[d.getMonth()], year: String(d.getFullYear()) };
-  });
-  if (months[0].month === months[1].month) months.pop();
-
-  var files = [];
-  months.forEach(function (m) {
-    var file = findNpsFile(m.month, m.year);
-    if (file) {
-      files.push(file);
-    } else {
-      Logger.log('No NPS found for ' + m.month + ' ' + m.year);
-    }
-  });
-  return files;
 }
 
 /** Most recently updated spreadsheet whose title matches an NPS pattern. */
@@ -303,53 +385,71 @@ function getOutputSpreadsheet() {
   return ss;
 }
 
-/** Rebuilds the week's tab, keeping Follow-up columns the team already filled in. */
-function writeWeekTab(output, week, rows) {
+/**
+ * Rebuilds one weekly tab. Follow-up columns the team already filled in are
+ * carried over; rows with follow-up that are no longer on the sweep are kept
+ * at the bottom, greyed out and marked resolved.
+ */
+function writeWeekTab(output, view, week, rows) {
   var tz = Session.getScriptTimeZone();
-  var name = TAB_PREFIX + Utilities.formatDate(week.start, tz, 'MM-dd-yy');
+  var name = view.prefix + Utilities.formatDate(week.start, tz, 'MM-dd-yy');
   var sheet = output.getSheetByName(name);
-  var saved = sheet ? readFollowUps(sheet) : {};
+  var saved = sheet ? readSavedRows(sheet) : {};
 
   if (!sheet) {
     sheet = output.insertSheet(name);
-    sortTabsNewestFirst(output);
+    sortTabs(output);
   }
   sheet.getRange(1, 1, sheet.getMaxRows(), sheet.getMaxColumns()).clearDataValidations();
   sheet.clear();
   sheet.setConditionalFormatRules([]);
 
+  var data = rows.map(function (r) {
+    var key = rowKey(r.clinic, r.patient, r.callDate);
+    var prior = saved[key];
+    delete saved[key];
+    return [
+      r.clinic, parseIsoDate(r.callDate), r.patient, r.takenBy, r.referral, r.diagnosis,
+      r.primaryIns, parseIsoDate(r.ieDate), r.daysCallToIe, r.daysPastCallWeek, r.status,
+      r.notes, '=HYPERLINK("' + r.sourceUrl + '","' + r.clinicTab + ' row ' + r.rowNumber + '")',
+      prior ? prior[FOLLOW_UP_COL - 1] : '', prior ? prior[FOLLOW_UP_NOTES_COL - 1] : '',
+    ];
+  });
+  var resolved = Object.keys(saved).map(function (k) {
+    var row = saved[k].slice();
+    row[STATUS_COL - 1] = RESOLVED_STATUS;
+    return row;
+  });
+
   var range = Utilities.formatDate(week.start, tz, 'EEE MM/dd/yyyy') + ' – ' +
     Utilities.formatDate(week.end, tz, 'EEE MM/dd/yyyy');
-  sheet.getRange(1, 1).setValue('Called ' + range + ' — IE scheduled after the week')
-    .setFontWeight('bold').setFontSize(13);
-  sheet.getRange(2, 1).setValue(rows.length + ' patient(s) · refreshed ' +
+  sheet.getRange(1, 1).setValue(view.title(range)).setFontWeight('bold').setFontSize(13);
+  sheet.getRange(2, 1).setValue(rows.length + ' patient(s)' +
+    (resolved.length ? ' + ' + resolved.length + ' resolved' : '') + ' · refreshed ' +
     Utilities.formatDate(new Date(), tz, 'MM/dd/yyyy h:mm a')).setFontColor('#666666');
 
   sheet.getRange(TABLE_HEADER_ROW, 1, 1, OUTPUT_HEADERS.length).setValues([OUTPUT_HEADERS])
     .setFontWeight('bold').setBackground('#1f4e79').setFontColor('#ffffff');
   sheet.setFrozenRows(TABLE_HEADER_ROW);
 
-  if (rows.length) {
-    var data = rows.map(function (r) {
-      var prior = saved[rowKey(r.clinic, r.patient, r.callDate)] || ['', ''];
-      return [
-        r.clinic, parseIsoDate(r.callDate), r.patient, r.takenBy, r.referral, r.diagnosis,
-        r.primaryIns, parseIsoDate(r.ieDate), r.daysCallToIe, r.daysPastWeekEnd, r.status,
-        r.notes, '=HYPERLINK("' + r.sourceUrl + '","' + r.clinicTab + ' row ' + r.rowNumber + '")',
-        prior[0], prior[1],
-      ];
-    });
-    var body = sheet.getRange(TABLE_HEADER_ROW + 1, 1, data.length, OUTPUT_HEADERS.length);
-    body.setValues(data).setVerticalAlignment('top');
-    sheet.getRange(TABLE_HEADER_ROW + 1, 2, data.length, 1).setNumberFormat('MM/dd/yyyy');
-    sheet.getRange(TABLE_HEADER_ROW + 1, 8, data.length, 1).setNumberFormat('MM/dd/yyyy');
-    sheet.getRange(TABLE_HEADER_ROW + 1, 12, data.length, 1).setWrap(true);
-    sheet.getRange(TABLE_HEADER_ROW + 1, FOLLOW_UP_COL, data.length, 1).setDataValidation(
+  var all = data.concat(resolved);
+  if (all.length) {
+    var first = TABLE_HEADER_ROW + 1;
+    sheet.getRange(first, 1, all.length, OUTPUT_HEADERS.length).setValues(all)
+      .setVerticalAlignment('top');
+    sheet.getRange(first, 2, all.length, 1).setNumberFormat('MM/dd/yyyy');
+    sheet.getRange(first, 8, all.length, 1).setNumberFormat('MM/dd/yyyy');
+    sheet.getRange(first, 12, all.length, 1).setWrap(true);
+    sheet.getRange(first, FOLLOW_UP_COL, all.length, 1).setDataValidation(
       SpreadsheetApp.newDataValidation().requireValueInList(CONFIG.FOLLOW_UP_OPTIONS, true)
         .setAllowInvalid(true).build());
-    shadeByDaysOut(sheet, data.length);
+    if (data.length) shadeByDaysOut(sheet, data.length);
+    if (resolved.length) {
+      sheet.getRange(first + data.length, 1, resolved.length, FOLLOW_UP_COL - 1)
+        .setFontColor('#999999').setBackground('#f3f3f3');
+    }
   } else {
-    sheet.getRange(TABLE_HEADER_ROW + 1, 1).setValue('No patients scheduled out for this week.');
+    sheet.getRange(TABLE_HEADER_ROW + 1, 1).setValue(view.empty);
   }
 
   writeClinicSummary(sheet, rows);
@@ -358,28 +458,32 @@ function writeWeekTab(output, week, rows) {
   sheet.setColumnWidth(FOLLOW_UP_NOTES_COL, 260);
 }
 
-/** Map of rowKey -> [Follow-up, Follow-up Notes] from an existing week tab. */
-function readFollowUps(sheet) {
+/**
+ * Map of rowKey -> full row (Source kept as its HYPERLINK formula) for
+ * every row on an existing tab where Follow-up or Follow-up Notes is filled.
+ */
+function readSavedRows(sheet) {
   var last = sheet.getLastRow();
   if (last <= TABLE_HEADER_ROW) return {};
-  var values = sheet.getRange(TABLE_HEADER_ROW + 1, 1, last - TABLE_HEADER_ROW, OUTPUT_HEADERS.length)
-    .getValues();
+  var range = sheet.getRange(TABLE_HEADER_ROW + 1, 1, last - TABLE_HEADER_ROW, OUTPUT_HEADERS.length);
+  var values = range.getValues();
+  var formulas = range.getFormulas();
   var tz = Session.getScriptTimeZone();
   var map = {};
-  values.forEach(function (v) {
-    var followUp = v[FOLLOW_UP_COL - 1];
-    var notes = v[FOLLOW_UP_NOTES_COL - 1];
-    if (!followUp && !notes) return;
+  values.forEach(function (v, i) {
+    if (!v[FOLLOW_UP_COL - 1] && !v[FOLLOW_UP_NOTES_COL - 1]) return;
     var callDate = toIsoKey(v[1], tz);
     if (!v[0] || !v[2] || !callDate) return;
-    map[rowKey(String(v[0]), String(v[2]), callDate)] = [followUp, notes];
+    var row = v.slice();
+    if (formulas[i][SOURCE_COL - 1]) row[SOURCE_COL - 1] = formulas[i][SOURCE_COL - 1];
+    map[rowKey(String(v[0]), String(v[2]), callDate)] = row;
   });
   return map;
 }
 
-/** Amber for 1–6 days past week end, red for 7+ (pushed two weeks or more). */
+/** Amber for 1–6 days past the call week, red for 7+ (pushed two weeks or more). */
 function shadeByDaysOut(sheet, count) {
-  var col = OUTPUT_HEADERS.indexOf('Days Past Week End') + 1;
+  var col = OUTPUT_HEADERS.indexOf('Days Past Call Week') + 1;
   var target = sheet.getRange(TABLE_HEADER_ROW + 1, col, count, 1);
   sheet.setConditionalFormatRules([
     SpreadsheetApp.newConditionalFormatRule().whenNumberGreaterThanOrEqualTo(7)
@@ -405,11 +509,22 @@ function writeClinicSummary(sheet, rows) {
   }
 }
 
-function sortTabsNewestFirst(output) {
+/** The view a tab belongs to, or null for any other tab. */
+function viewOfTab(name) {
+  if (name.indexOf(VIEWS.IES.prefix) === 0) return VIEWS.IES;
+  if (name.indexOf(VIEWS.CALLS.prefix) === 0) return VIEWS.CALLS;
+  return null;
+}
+
+/** IE-week tabs first, then call-week tabs; newest first within each. */
+function sortTabs(output) {
   var weekTabs = output.getSheets().filter(function (s) {
-    return s.getName().indexOf(TAB_PREFIX) === 0;
+    return viewOfTab(s.getName());
   }).sort(function (a, b) {
-    return tabWeekKey(b.getName()).localeCompare(tabWeekKey(a.getName()));
+    var va = viewOfTab(a.getName());
+    var vb = viewOfTab(b.getName());
+    return va.order - vb.order ||
+      tabWeekKey(b.getName(), vb).localeCompare(tabWeekKey(a.getName(), va));
   });
   weekTabs.forEach(function (s, i) {
     output.setActiveSheet(s);
@@ -417,25 +532,26 @@ function sortTabsNewestFirst(output) {
   });
   // Drop the blank default tab a new spreadsheet comes with.
   output.getSheets().forEach(function (s) {
-    if (s.getName().indexOf(TAB_PREFIX) !== 0 && s.getLastRow() === 0 &&
-        output.getSheets().length > 1) {
+    if (!viewOfTab(s.getName()) && s.getLastRow() === 0 && output.getSheets().length > 1) {
       output.deleteSheet(s);
     }
   });
 }
 
+/** Keeps the newest CONFIG.MAX_WEEKS_KEPT tabs of each view. */
 function trimOldTabs(output) {
-  var weekTabs = output.getSheets().filter(function (s) {
-    return s.getName().indexOf(TAB_PREFIX) === 0;
-  }).sort(function (a, b) {
-    return tabWeekKey(b.getName()).localeCompare(tabWeekKey(a.getName()));
+  [VIEWS.CALLS, VIEWS.IES].forEach(function (view) {
+    output.getSheets().filter(function (s) {
+      return viewOfTab(s.getName()) === view;
+    }).sort(function (a, b) {
+      return tabWeekKey(b.getName(), view).localeCompare(tabWeekKey(a.getName(), view));
+    }).slice(CONFIG.MAX_WEEKS_KEPT).forEach(function (s) { output.deleteSheet(s); });
   });
-  weekTabs.slice(CONFIG.MAX_WEEKS_KEPT).forEach(function (s) { output.deleteSheet(s); });
 }
 
 /** "Week of 10-05-26" -> "26-10-05" so tab names sort chronologically. */
-function tabWeekKey(name) {
-  var m = name.substring(TAB_PREFIX.length).split('-');
+function tabWeekKey(name, view) {
+  var m = name.substring(view.prefix.length).split('-');
   return m.length === 3 ? m[2] + '-' + m[0] + '-' + m[1] : '';
 }
 
@@ -443,8 +559,10 @@ function notify(output, results) {
   if (!CONFIG.NOTIFY_EMAILS.length) return;
   var tz = Session.getScriptTimeZone();
   var lines = results.map(function (r) {
-    return 'Week of ' + Utilities.formatDate(r.week.start, tz, 'MM/dd') + ': ' +
-      r.rows.length + ' patient(s) called that week with an IE booked in a later week';
+    var when = Utilities.formatDate(r.week.start, tz, 'MM/dd');
+    return r.view === VIEWS.IES
+      ? 'IEs week of ' + when + ': ' + r.rows.length + ' patient(s) called in an earlier week'
+      : 'Calls week of ' + when + ': ' + r.rows.length + ' patient(s) with an IE booked in a later week';
   });
   MailApp.sendEmail({
     to: CONFIG.NOTIFY_EMAILS.join(','),

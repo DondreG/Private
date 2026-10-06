@@ -8,15 +8,20 @@ earlier slot.
 
 ## Rule
 
-For each week (**Sunday–Saturday**, so weekend calls are included; set by
-`WEEK_START_DAY`), a patient row is flagged when:
+Weeks run **Sunday–Saturday**, so weekend calls are included (set by
+`WEEK_START_DAY`). There are two weekly views:
 
-1. **Call date** (`Date` column) falls inside the week, Sunday through Saturday, **and**
-2. **FS/IE Date** is *after* that Saturday (the next Sunday or later), **and**
-3. **Status** is not `Inactive` (set by `EXCLUDE_STATUSES`).
+**Call week** (tab `Week of 10-04-26`): patients who **called** that week and
+whose **FS/IE Date** is *after* that Saturday (the next Sunday or later).
 
-Rows with no FS/IE Date (still pending) are not flagged, because they haven't
-been scheduled.
+**IE week** (tab `IEs Week of 10-11-26`): patients whose **FS/IE Date** falls
+in that week but who **called in an earlier week**. This shows who is coming
+in that week who could have been seen sooner. It looks back up to 60 days
+for the original call (`IE_LOOKBACK_DAYS`).
+
+In both views, rows with status `Inactive` are left out (`EXCLUDE_STATUSES`).
+So are rows with no FS/IE Date, because those patients haven't been
+scheduled.
 
 ## Where the data comes from
 
@@ -41,22 +46,30 @@ Status, Inactive Reason`.
 
 All output goes to one spreadsheet, **NPS — IE Scheduled Out Sweep**. The
 first run creates it in your Drive. To use an existing sheet instead, set
-`OUTPUT_SPREADSHEET_ID`. The spreadsheet has one tab per week (for example
-`Week of 10-04-26`), with the newest week first and 12 weeks kept. Each tab has:
+`OUTPUT_SPREADSHEET_ID`. IE-week tabs come first, then call-week tabs, each
+with the newest week first. 12 weeks of each are kept. Each tab has:
 
 - Clinic, call date, patient, taken by, referral source, diagnosis, primary
-  insurance, FS/IE date, **Days Call → IE**, **Days Past Week End** (amber =
-  1–6 days, red = 7+ days), status, NPS notes, and a **Source** link that
+  insurance, FS/IE date, **Days Call → IE**, **Days Past Call Week**: how far the IE
+  is past the Saturday of the week they called (amber = 1–6 days, red = 7+), status, NPS notes, and a **Source** link that
   jumps to the exact row in the NPS.
 - **Follow-up** (dropdown: Moved up to this week / Offered earlier — pt
   declined / No earlier availability / Left message / Pt requested later
   date) and **Follow-up Notes**, for the team to fill in.
 - A count by clinic to the right of the table.
 
-Each run rebuilds **this week's and last week's** tabs, so the current week
-grows day by day and late data entry for last week is still picked up.
+Each daily run rebuilds these tabs, so they roll forward every week on their own:
+
+| Tab | Weeks |
+| --- | --- |
+| Call week | last week, this week and next week (next week's tab fills in once its calls start on Sunday) |
+| IE week | next week |
+
 **Anything typed in Follow-up or Follow-up Notes is kept** across re-runs. It
-is matched by clinic + patient + call date.
+is matched by clinic + patient + call date. If a patient with follow-up later
+drops off the sweep (for example, their IE was moved up), the row is **not
+deleted**. It moves to the bottom of the tab, greyed out, with the status
+"No longer scheduled out (IE date or status changed)".
 
 ## Setup
 
@@ -74,7 +87,7 @@ is matched by clinic + patient + call date.
    6 PM.
 
 To back-fill an earlier week, run `sweepWeekContaining('2026-09-14')`. It
-takes any date in that week. You can run it from the editor by temporarily
+takes any date in that week and builds both its call-week and IE-week tabs. You can run it from the editor by temporarily
 calling it from a small wrapper function.
 
 The Google account that runs the script needs at least view access to the
@@ -84,9 +97,11 @@ monthly NPS files. They're currently owned by jenny@ and shared with you.
 
 The filter logic was run against the September and October 2026 NPS files:
 
-| Week | Flagged |
-| --- | --- |
-| Sun 9/27 – Sat 10/3 (spans two months) | 97 (1 more was excluded as Inactive) |
-| Sun 10/4 – Tue 10/6 (week in progress) | 13 |
+| View | Week | Flagged |
+| --- | --- | --- |
+| Call week | Sun 9/27 – Sat 10/3 (spans two months) | 97 (1 more was excluded as Inactive) |
+| Call week | Sun 10/4 – Tue 10/6 (week in progress) | 13 |
+| Call week | Sun 10/11 – Sat 10/17 | 0 (calls haven't happened yet) |
+| IE week | Sun 10/11 – Sat 10/17 | 26 |
 
 These counts match an independent check of the same files.
