@@ -1,3 +1,7 @@
+> This repo has two Apps Script tools: the **Authorization Tracking Report**
+> (below, `apps-script/`) and the **[NPS IE Scheduled-Out Sweep](nps-ie-sweep/README.md)**
+> (`nps-ie-sweep/`).
+
 # Authorization Tracking Report (weekly)
 
 Automates the manual authorization check the offshore team currently does by
