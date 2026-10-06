@@ -71,6 +71,30 @@ drops off the sweep (for example, their IE was moved up), the row is **not
 deleted**. It moves to the bottom of the tab, greyed out, with the status
 "No longer scheduled out (IE date or status changed)".
 
+## Web app
+
+`WebApp.gs` + `Index.html` turn the tracking sheet into a page you can open
+from a link in a browser or on a phone. The page shows each weekly tab as a
+list grouped by clinic, with a clinic filter, search, and a "Hide worked"
+toggle. It has a **Follow-up** dropdown and notes field that save straight
+into the sheet, and a **Refresh now** button that runs the full sweep.
+
+The page reads the tracking sheet, so it opens instantly. Saves find the
+patient by clinic + name + call date, so they still land on the right row
+after a refresh reorders the tab.
+
+Setup, in the same Apps Script project:
+
+1. **Files → + → Script**, name it `WebApp`, and paste `WebApp.gs`.
+2. **Files → + → HTML**, name it exactly `Index`, and paste `Index.html`.
+3. Save, then go to **Deploy → New deployment**. Click the gear icon, choose
+   **Web app**, set *Execute as* to **Me** and *Who has access* to **Anyone
+   within Trinity Rehab**, and click **Deploy**.
+4. Copy the **Web app URL**. That's the link to share.
+
+After changing the code, use **Deploy → Manage deployments → ✏️ → Version:
+New version → Deploy** so the same link picks up the change.
+
 ## Setup
 
 1. Go to [script.google.com](https://script.google.com) → **New project**
