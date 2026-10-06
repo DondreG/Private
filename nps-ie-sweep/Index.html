@@ -51,6 +51,13 @@
   label.chk { display: flex; gap: 6px; align-items: center; color: var(--muted); }
   :focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
   .legend { color: var(--muted); font-size: 12px; display: flex; gap: 12px; flex-wrap: wrap; }
+  .byclinic { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
+  .cchip { border: 1px solid var(--line); background: var(--card); color: var(--ink); border-radius: 14px;
+    padding: 3px 10px; font: inherit; font-size: 12px; cursor: pointer; }
+  .cchip b { margin-left: 5px; }
+  .cchip.zero { color: var(--muted); }
+  .cchip.zero b { font-weight: 400; }
+  .cchip.on { background: var(--brand); color: #fff; border-color: var(--brand); }
   .sw { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 4px; vertical-align: -1px; }
   .clinic { margin-top: 18px; }
   .clinic h3 { font-size: 13px; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); margin: 0 0 6px; }
@@ -174,15 +181,31 @@
     });
     panel.appendChild(stats);
 
+    // Every clinic, including 0s, so it's clear each one was checked.
+    var counts = {};
+    allClinics(tab).forEach(function (c) { counts[c] = 0; });
+    live.forEach(function (r) { counts[r.clinic] = (counts[r.clinic] || 0) + 1; });
+    var chips = el('div', 'byclinic');
+    chips.setAttribute('aria-label', 'Patients by clinic');
+    allClinics(tab).forEach(function (c) {
+      var chip = el('button', 'cchip' + (counts[c] ? '' : ' zero') + (state.clinic === c ? ' on' : ''), c);
+      chip.type = 'button';
+      chip.appendChild(el('b', '', String(counts[c])));
+      chip.title = counts[c] + ' patient(s) at ' + c;
+      chip.onclick = function () { state.clinic = state.clinic === c ? '' : c; render(); };
+      chips.appendChild(chip);
+    });
+    panel.appendChild(chips);
+
     var tools = el('div', 'tools');
     var clinicSel = el('select');
     clinicSel.setAttribute('aria-label', 'Clinic');
     clinicSel.appendChild(new Option('All clinics', ''));
-    uniq(tab.rows.map(function (r) { return r.clinic; })).forEach(function (c) {
+    allClinics(tab).forEach(function (c) {
       clinicSel.appendChild(new Option(c, c));
     });
     clinicSel.value = state.clinic;
-    clinicSel.onchange = function () { state.clinic = clinicSel.value; renderList(tab, list); };
+    clinicSel.onchange = function () { state.clinic = clinicSel.value; render(); };
     var search = el('input');
     search.type = 'search'; search.placeholder = 'Search patient, insurance, notes…'; search.value = state.q;
     search.setAttribute('aria-label', 'Search');
@@ -212,6 +235,11 @@
     var b = el('span', 'sw'); b.style.background = color;
     s.appendChild(b); s.appendChild(document.createTextNode(text));
     return s;
+  }
+
+  /** All clinics: the configured list plus any clinic found on this tab. */
+  function allClinics(tab) {
+    return uniq((state.data.clinics || []).concat(tab.rows.map(function (r) { return r.clinic; })));
   }
 
   function byName(x, y) { return x.localeCompare(y, undefined, { sensitivity: 'base' }); }

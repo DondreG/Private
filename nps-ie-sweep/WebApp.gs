@@ -28,6 +28,7 @@ function getDashboardData() {
   return {
     sheetUrl: output.getUrl(),
     followUpOptions: CONFIG.FOLLOW_UP_OPTIONS,
+    clinics: allClinicNames(),
     loadedAt: Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'MM/dd/yyyy h:mm a'),
     tabs: tabs,
   };
