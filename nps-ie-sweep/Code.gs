@@ -13,7 +13,7 @@
  * header row with "Date" (call date), "Patient Name", "FS/IE Date", etc.
  * Tabs without that header (CONSOLIDATED, DIGITAL TRACKING, DDB, ELLAAGENT)
  * are skipped automatically. Because a week can straddle two months
- * (e.g. Mon 9/28 – Sun 10/4), the script opens every monthly NPS the week
+ * (e.g. Sun 9/27 – Sat 10/3), the script opens every monthly NPS the week
  * touches, found by title — no file IDs to update each month.
  *
  * Output: ONE persistent spreadsheet with a tab per week ("Week of
@@ -33,9 +33,9 @@ var CONFIG = {
   OUTPUT_TITLE: 'NPS — IE Scheduled Out Sweep',
 
   // First day of the week: 0 = Sunday, 1 = Monday. A week runs 7 days from
-  // here, so with Monday the week is Mon–Sun and "scheduled out" means the
-  // FS/IE Date is the following Monday or later.
-  WEEK_START_DAY: 1,
+  // here, so with Sunday the week is Sun–Sat (weekend calls included) and
+  // "scheduled out" means the FS/IE Date is the following Sunday or later.
+  WEEK_START_DAY: 0,
 
   // Monthly NPS titles. {MONTH} = "October", {YEAR} = "2026". Matched
   // case-insensitively, ignoring leading/trailing spaces (several of the
