@@ -56,14 +56,14 @@ with the newest week first. 12 weeks of each are kept. Each tab has:
 - **Follow-up** (dropdown: Moved up to this week / Offered earlier — pt
   declined / No earlier availability / Left message / Pt requested later
   date) and **Follow-up Notes**, for the team to fill in.
-- A count by clinic to the right of the table.
+- A count by clinic to the right of the table, listing **all 27 clinics** (0 when a clinic had none that week). Clinic names come from `CLINIC_NAMES` in `CONFIG` (for example tab `EW` is East Windsor).
 
 Each daily run rebuilds these tabs, so they roll forward every week on their own:
 
 | Tab | Weeks |
 | --- | --- |
 | Call week | last week, this week and next week (next week's tab fills in once its calls start on Sunday) |
-| IE week | next week |
+| IE week | this week and next week |
 
 **Anything typed in Follow-up or Follow-up Notes is kept** across re-runs. It
 is matched by clinic + patient + call date. If a patient with follow-up later

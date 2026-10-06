@@ -21,8 +21,8 @@
  * range touches, found by title — no file IDs to update each month.
  *
  * Output: ONE persistent spreadsheet. Each daily run rebuilds the call-week
- * tabs for last week, this week and next week, and the IE-week tab for next
- * week, so every week rolls forward on its own. Whatever the team typed in
+ * tabs for last week, this week and next week, and the IE-week tabs for this
+ * week and next week, so every week rolls forward on its own. Whatever the team typed in
  * Follow-up / Follow-up Notes is kept; a row with follow-up that drops off
  * the sweep (e.g. IE moved up) stays on the tab, marked resolved.
  */
@@ -69,6 +69,41 @@ var CONFIG = {
   // Rows whose Status is one of these are left out (case-insensitive).
   // Set to [] to include everything.
   EXCLUDE_STATUSES: ['Inactive'],
+
+  // NPS tab name -> clinic name shown in the sweep. Every clinic listed here
+  // appears in each weekly tab's count-by-clinic summary, with 0 if it had
+  // no patients that week. A clinic tab not listed here still gets swept and
+  // shows under its title from cell A2.
+  CLINIC_NAMES: {
+    BR: 'Brick',
+    CherryHill: 'Cherry Hill',
+    CLRK: 'Clark',
+    CLFTN: 'Clifton',
+    CLIFTN: 'Clifton',
+    Doylestown: 'Doylestown',
+    EB: 'East Brunswick',
+    EW: 'East Windsor',
+    EMRSN: 'Emerson',
+    Flemington: 'Flemington',
+    HAM: 'Hamilton',
+    HWL: 'Howell',
+    MAN: 'Manalapan',
+    MAT: 'Matawan',
+    MET: 'Metuchen',
+    Middletown: 'Middletown',
+    Newtown: 'Newtown',
+    Piscataway: 'Piscataway',
+    SEWELL: 'Sewell',
+    SHRW: 'Shrewsbury',
+    SMST: 'Somerset',
+    SMRVL: 'Somerville',
+    SPRTA: 'Sparta',
+    TR: 'Toms River',
+    UpperDublin: 'Upper Dublin',
+    Warren: 'Warren',
+    WayneNJ: 'Wayne',
+    WDBRDGE: 'Woodbridge',
+  },
 
   // How far back the IE-week view looks for the original call. Calls older
   // than this many days before the IE week are not included.
@@ -134,8 +169,8 @@ var VIEWS = {
 // ---------------------------------------------------------------------------
 
 /**
- * Daily job: call-week tabs for last, this and next week, plus the IE-week
- * tab for next week.
+ * Daily job: call-week tabs for last, this and next week, plus IE-week tabs
+ * for this week and next week.
  */
 function runSweep() {
   var thisWeek = weekRange(new Date());
@@ -149,9 +184,11 @@ function runSweep() {
     writeWeekTab(output, VIEWS.CALLS, week, rows);
     return { view: VIEWS.CALLS, week: week, rows: rows };
   });
-  var ieRows = sweepIeWeek(nextWeek, cache);
-  writeWeekTab(output, VIEWS.IES, nextWeek, ieRows);
-  results.unshift({ view: VIEWS.IES, week: nextWeek, rows: ieRows });
+  [thisWeek, nextWeek].forEach(function (week) {
+    var ieRows = sweepIeWeek(week, cache);
+    writeWeekTab(output, VIEWS.IES, week, ieRows);
+    results.push({ view: VIEWS.IES, week: week, rows: ieRows });
+  });
 
   trimOldTabs(output);
   notify(output, results);
@@ -340,10 +377,41 @@ function findHeader(values) {
   return null;
 }
 
-/** Clinic display name: the title in A2 ("EAST WINDS"), else the tab name. */
+/**
+ * Clinic display name: CONFIG.CLINIC_NAMES for the tab, else the title in A2
+ * ("EAST WINDS"), else the tab name. Always passed through canonicalClinic so
+ * spelling and capitalization match the CONFIG list.
+ */
 function clinicName(values, tabName) {
+  if (CONFIG.CLINIC_NAMES[tabName]) return CONFIG.CLINIC_NAMES[tabName];
   var title = values.length > 1 ? String(values[1][0] || '').trim() : '';
-  return title || tabName;
+  return canonicalClinic(title || tabName);
+}
+
+// A2 titles that are abbreviated in the NPS -> clinic name.
+var CLINIC_TITLE_ALIASES = { 'east winds': 'East Windsor', 'east bruns': 'East Brunswick' };
+
+/**
+ * Maps any spelling of a clinic ("BRICK", "Brick", "EAST WINDS", "EW") to
+ * its CONFIG.CLINIC_NAMES name, so rows written before a rename still match.
+ */
+function canonicalClinic(name) {
+  var n = String(name || '').trim();
+  if (CONFIG.CLINIC_NAMES[n]) return CONFIG.CLINIC_NAMES[n];
+  var lower = n.toLowerCase();
+  if (CLINIC_TITLE_ALIASES[lower]) return CLINIC_TITLE_ALIASES[lower];
+  var names = allClinicNames();
+  for (var i = 0; i < names.length; i++) {
+    if (names[i].toLowerCase() === lower) return names[i];
+  }
+  return n;
+}
+
+/** Unique clinic names from CONFIG.CLINIC_NAMES, A–Z. */
+function allClinicNames() {
+  var seen = {};
+  Object.keys(CONFIG.CLINIC_NAMES).forEach(function (k) { seen[CONFIG.CLINIC_NAMES[k]] = true; });
+  return Object.keys(seen).sort();
 }
 
 /** Most recently updated spreadsheet whose title matches an NPS pattern. */
@@ -476,7 +544,8 @@ function readSavedRows(sheet) {
     if (!v[0] || !v[2] || !callDate) return;
     var row = v.slice();
     if (formulas[i][SOURCE_COL - 1]) row[SOURCE_COL - 1] = formulas[i][SOURCE_COL - 1];
-    map[rowKey(String(v[0]), String(v[2]), callDate)] = row;
+    row[0] = canonicalClinic(v[0]);
+    map[rowKey(row[0], String(v[2]), callDate)] = row;
   });
   return map;
 }
@@ -493,10 +562,14 @@ function shadeByDaysOut(sheet, count) {
   ]);
 }
 
-/** Per-clinic counts to the right of the table. */
+/**
+ * Per-clinic counts to the right of the table: every clinic in
+ * CONFIG.CLINIC_NAMES (0 if none that week), most first.
+ */
 function writeClinicSummary(sheet, rows) {
   var col = OUTPUT_HEADERS.length + 2;
   var counts = {};
+  allClinicNames().forEach(function (c) { counts[c] = 0; });
   rows.forEach(function (r) { counts[r.clinic] = (counts[r.clinic] || 0) + 1; });
   var clinics = Object.keys(counts).sort(function (a, b) {
     return counts[b] - counts[a] || a.localeCompare(b);
