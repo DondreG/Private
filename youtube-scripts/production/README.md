@@ -4,7 +4,7 @@ Everything here is generated from the locked script one folder up. Use the files
 
 | Step | File | What it saves you |
 |---|---|---|
-| 1. Voice | `01-narration-tts.txt` | Narration split into 254 numbered lines in 13 beat blocks, with ElevenLabs `<break>` pause tags at every scripted hold and a pronunciation guide. Paste one beat block at a time; retake a single line by number. |
+| 1. Voice | `01-narration-tts.txt` | Narration split into 253 numbered lines in 13 beat blocks, with ElevenLabs `<break>` pause tags at every scripted hold and a pronunciation guide. Paste one beat block at a time; retake a single line by number. |
 | 2. Assets | `03-capture-list.md` | The 47 distinct manga panels and 6 anime clips to capture, deduplicated, each with the official page to screenshot from and the posts that show the exact panel. |
 | 3. Edit | `02-asset-pull-sheet.csv` | All 99 visual cues in timeline order: beat, kind, what to pull, edit direction, reference IDs, URLs, optional fan-animation swap, plus `status`, `file_name` and `notes` columns to track progress. Open it in Sheets or Excel. |
 | 4. Graphics | `04-graphics-build-list.md` | The 8 reusable templates to build once (captions, chapter tags, the Infinity diagram, progress bar, flowchart, bypass list, wheel SFX, the arm flash) and every text card and motion graphic in order. |
