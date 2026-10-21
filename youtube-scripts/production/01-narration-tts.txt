@@ -1,0 +1,311 @@
+# Narration, TTS-ready
+Gojo vs Sukuna: The One Detail Everyone Missed That Decided the Fight
+
+How to use: paste one BEAT block at a time into ElevenLabs (or read it yourself). Lines are numbered so retakes are cheap; the numbers are not read aloud. <break time="Xs" /> tags are ElevenLabs pause markers; delete them for other tools and pause by hand. Target pace: about 160 words per minute. Total: 1,941 words, 13 beats.
+
+Pronunciation guide (respell in the text if the voice mangles a name):
+- Gojo: GOH-joh. Satoru: SAH-toh-roo.
+- Sukuna: soo-KOO-nah. Ryomen: RYOH-men.
+- Mahoraga: mah-hoh-RAH-gah.
+- Megumi: meh-GOO-mee. Shoko: SHOH-koh. Geto: GEH-toh.
+- Kusakabe: koo-sah-KAH-beh. Kashimo: KAH-shee-moh. Jogo: JOH-goh.
+- Agito: ah-GEE-toh (hard g). Nue: NOO-eh.
+- Shibuya: shih-BOO-yah. Shinjuku: shin-JOO-koo.
+- Gege Akutami: GEH-geh ah-koo-TAH-mee.
+- Chapter numbers are read as digits in pairs: "two thirty-four", never "two hundred thirty-four". They are already written that way below.
+- Technique names in plain English: Infinity, Unlimited Void, Hollow Purple, Malevolent Shrine, Domain Amplification, Dismantle, Black Flash.
+
+Delivery: confident, conversational, no hype. Drop volume and slow down on the two freeze frames (the arm in 234, the halves in 236). The eulogy in the outro and "Nah, I'd win" are read as exact quotes; every other character line is a paraphrase, which the text signals with "in short".
+
+
+=== BEAT 00:00  The cut nobody saw ===
+<break time="1.0s" />
+001  Chapter two thirty-five ends with a sorcerer calling the fight.
+002  Kusakabe says it plainly.
+003  In short: no Mahoraga, no Domain Amplification, Gojo wins.
+004  Quick warning: this spoils the whole fight and the chapters after it.
+005  Anime-only?
+006  Come back later, or stay and see how it ends.
+007  Because one chapter later, the manga cuts to this.
+008  Satoru Gojo, in two pieces. <break time="2.0s" />
+009  No swing.
+010  No slash drawn on the page.
+011  Nobody saw the cut.
+012  Not the sorcerers watching.
+013  Not you.
+014  Not even the manga. <break time="1.0s" />
+015  Freeze there. <break time="1.5s" />
+016  What just happened? <break time="1.5s" />
+017  Honest answer: you already watched it happen.
+018  Two chapters earlier.
+019  You just didn't recognise it. <break time="2.0s" />
+
+=== BEAT 00:38  The detail, stated ===
+<break time="1.0s" />
+020  So here it is.
+021  Sukuna didn't need Mahoraga to kill Gojo.
+022  He needed Mahoraga to show him how.
+023  The slash that took Gojo's arm in chapter two thirty-four was the finishing move in rehearsal.
+024  Sukuna watched it land, copied it into his own technique, and by the time Gojo vaporised Mahoraga in two thirty-five, the lesson was already on record.
+025  Blowing up the teacher changed nothing.
+026  That's the claim.
+027  Now I have to earn it.
+028  So we rewind.
+029  Back to Shibuya, where Sukuna first met this thing.
+
+=== BEAT 01:11  Shibuya: it learns ===
+<break time="1.0s" />
+030  Season two, Shibuya.
+031  Megumi, ready to die, summons the one shikigami no user has ever tamed.
+032  Mahoraga.
+033  Sukuna takes over Yuji's body and steps in.
+034  He heals Megumi first.
+035  In short: don't die, I have a use for you.
+036  Sukuna fires Dismantle.
+037  Mahoraga's wheel turns.
+038  The next Dismantle gets deflected.
+039  It's adapted to slashing in general.
+040  Here's the beat that matters, paraphrased from chapter one eighteen.
+041  Sukuna admits that if Megumi had used this on him at their first meeting, it might have beaten him.
+042  He thanks Megumi for showing him the way.
+043  He's already treating it as a teacher.
+044  Then he opens Malevolent Shrine with no barrier, painting on air rather than on a canvas, as the narration puts it.
+045  The wheel keeps turning anyway.
+046  So the only way to kill Mahoraga is a different technique, before it adapts.
+047  Hand sign.
+048  Open.
+049  The fire arrow.
+050  Mahoraga dies. <break time="1.0s" />
+051  Remember that answer.
+052  Kill it before it learns.
+053  In Shinjuku, he'll give the opposite one.
+
+=== BEAT 02:12  The rule: Infinity ===
+<break time="1.0s" />
+054  Now the rule that makes all of this necessary.
+055  Season one, episode seven.
+056  Gojo holds out his hand.
+057  Jogo reaches for it, and his hand slows to a stop just before their hands meet.
+058  Infinity.
+059  Gojo explains, in short: your attacks never reach me, what you're touching is the infinity between us.
+060  The space in front of Gojo gets divided endlessly, so anything travelling toward him never arrives.
+061  The list of known ways through is short.
+062  A domain's sure-hit.
+063  Domain Amplification, which switches off your own technique while it's on.
+064  The Inverted Spear of Heaven.
+065  And a fourth slot, still empty.
+066  An attack that doesn't travel toward Gojo at all.
+067  Hold that phrase. <break time="1.0s" />
+068  Doesn't travel toward him.
+069  That's the whole video. <break time="1.0s" />
+070  Sukuna doesn't have that one.
+071  Watch how he gets it.
+
+=== BEAT 02:58  Shinjuku: the domain war as data ===
+<break time="1.0s" />
+072  Chapter two twenty-one.
+073  Gojo is asked if he might lose, and the answer is: "Nah, I'd win."
+074  It opens with a two hundred percent Purple fired from Shibuya, then becomes a domain war.
+075  Five clashes.
+076  I'm not scoring them, because the sources genuinely disagree.
+077  What matters is this.
+078  Malevolent Shrine has no barrier, so it can tear Unlimited Void open from the outside.
+079  Techniques burn out on both sides; both men repair by damaging their own brains and healing them.
+080  Chapter two twenty-eight.
+081  Watch this page.
+082  Somewhere in darkness, Mahoraga's wheel turns.
+083  And at the same instant, Gojo gets a nosebleed.
+084  Nothing is said.
+085  Two images, side by side.
+086  First clue the experiment is running.
+087  Chapter two twenty-nine.
+088  Sukuna opens his domain less than a hundredth of a second late, because he healed his body before his technique.
+089  Void lands.
+090  Sukuna is frozen, and his Shrine collapses.
+091  The strongest sorcerer alive just won the domain war.
+092  And then Sukuna summons Mahoraga. <break time="2.0s" />
+
+=== BEAT 03:59  Mini-payoff 1: the readout ===
+<break time="1.0s" />
+093  Chapter two thirty.
+094  Mahoraga stabs its sword into the ground and Unlimited Void shatters.
+095  Gojo goes straight to the maths.
+096  Adapting in under a tenth of a second is impossible.
+097  So he works it out.
+098  Megumi's suppressed soul was taking every one of those five Voids, so the wheel could turn unseen.
+099  Sukuna confirms it.
+100  In short, he wanted to deal with Unlimited Void first.
+101  First.
+102  There's a second stage.
+103  Pause on what Gojo just learned, because it's going to kill him.
+104  He caught Sukuna running an experiment.
+105  He now knows adaptation lives in Mahoraga and its wheel.
+106  Correct.
+107  It's also the exact belief Sukuna needs him to hold.
+108  Gojo tries a sixth domain.
+109  Blood pours from his nose.
+110  No more domains, for either of them. <break time="1.5s" />
+
+=== BEAT 04:46  The countdown ===
+<break time="1.0s" />
+111  Chapter two thirty-one.
+112  The wheel now sits over Sukuna's own head, with a rule attached.
+113  Whenever Sukuna uses Domain Amplification to touch Gojo, the wheel goes grey and stops.
+114  He can't adapt and touch Gojo at the same time.
+115  Gojo sees this and rations himself to Limitless's basic effects, so the wheel has less to eat.
+116  He says, in short, I'll kill you before it finishes turning.
+117  Chapter two thirty-two.
+118  Red through a pillar.
+119  Then a Black Flash to the gut, and Sukuna is out cold, standing up.
+120  The wheel falls off his head.
+121  It hits the ground.
+122  And it completes its spin anyway.
+123  Gojo is dragged into the shadow.
+124  Mahoraga's sword cuts through Infinity and opens his shoulder.
+125  Adaptation one.
+126  Contact.
+127  Per Sukuna's own explanation later, in two thirty-six, this first version cancels the cursed energy the blade touches.
+128  A rough draft.
+129  Not the finishing move.
+130  Watch what changes.
+
+=== BEAT 05:43  Midpoint reframe: the arm ===
+<break time="1.0s" />
+131  Now reframe the entire fight.
+132  Stop watching it as Gojo versus Sukuna.
+133  Watch it as Sukuna versus Infinity, with Gojo as the test subject.
+134  Chapter two thirty-three.
+135  Sukuna fires Max Elephant's water without summoning it, then merges Nue with Divine Dog Totality into Agito.
+136  Three on one.
+137  Mahoraga stays separate, which is the point.
+138  Chapter two thirty-four.
+139  Sukuna tells Mahoraga to show its full power.
+140  The wheel spins again.
+141  He said he'd kill it before it finished turning.
+142  It just finished for the second time.
+143  And a flying slash comes off the blade and takes Gojo's right arm above the elbow.
+144  Look at this panel.
+145  Everyone reads it as Gojo's hurt.
+146  Shoko is worried because he's healing far too slowly; his output has dropped.
+147  Damage in a brawl.
+148  But listen to what Sukuna says two chapters later.
+149  This second adaptation, in short, didn't neutralise cursed energy.
+150  It targeted the very space Gojo occupied.
+151  This wasn't contact any more.
+152  It was a cut that arrived at the place where his arm was.
+153  Adaptation two.
+154  Different in kind. <break time="1.0s" />
+155  I'm leaving this panel on screen a second longer than is comfortable.
+156  Because that's the kill shot. <break time="1.0s" />
+157  In rehearsal. <break time="4.0s" />
+
+=== BEAT 06:56  Mini-payoff 2: the teacher dies ===
+<break time="1.0s" />
+158  Chapter two thirty-five.
+159  Gojo comes back.
+160  The arm was already regrowing by the end of two thirty-four.
+161  Black Flash after Black Flash, and his reverse cursed technique output returns.
+162  Then the trick.
+163  He fires Blue and Red separately.
+164  Blue's pull drags Mahoraga into position.
+165  He chants.
+166  Hollow Purple detonates in every direction, on everyone, including himself.
+167  Mahoraga is gone.
+168  Its wheel is gone, disintegrated, and I'm being precise because it matters later.
+169  Sukuna is barely standing, missing his left hand.
+170  He can't use Domain Amplification, and his healing has slowed to a crawl.
+171  Kusakabe says it, paraphrased: without Mahoraga and without Amplification, Gojo wins the battle of the strongest. <break time="1.0s" />
+172  You cheered.
+173  I cheered.
+174  We all believed what Gojo believed.
+175  The adaptation lived in the shikigami.
+176  Kill the shikigami, kill the answer.
+177  Reasonable.
+178  And wrong.
+179  Now ask it from Sukuna's chair.
+180  Why let Mahoraga die?
+181  Because every second it stood there, it was the one visible reason for Gojo to keep his guard up.
+182  He needed Gojo to watch it vanish and draw the obvious conclusion.
+183  The teacher is gone.
+184  The lesson is on record.
+
+=== BEAT 08:00  The reveal ===
+<break time="1.0s" />
+185  Back to the freeze frame.
+186  Chapter two thirty-six, after the airport.
+187  The cut is never drawn.
+188  Sukuna explains it standing over the halves.
+189  In summary: He admits he could not crack Infinity on his own.
+190  So he used Mahoraga's second adaptation as his model, and expanded his own Dismantle to target not Gojo, but the world Gojo was standing in.
+191  Now go back to the rule.
+192  A Dismantle aimed at Gojo has to cross the gap.
+193  It stalls.
+194  A Dismantle aimed at the region of space containing Gojo never approaches him.
+195  The region gets cut as a whole, and his body, being inside it, gets cut with it.
+196  Infinity isn't broken.
+197  It's never engaged. <break time="1.0s" />
+198  That fourth slot is filled.
+199  And that's why the arm mattered.
+200  Chapter two thirty-four, an arm, cut by a slash aimed at the space it was in.
+201  Chapter two thirty-six, a torso, cut by a slash aimed at the space it was in.
+202  Same idea.
+203  Different author.
+204  Gojo destroyed the teacher.
+205  The lesson had already been written down. <break time="1.5s" />
+
+=== BEAT 09:04  Mini-payoff 3: how he still has it ===
+<break time="1.0s" />
+206  The obvious objection.
+207  If Mahoraga is dead and the wheel is dust, how does Sukuna still have this?
+208  Because he didn't inherit adaptation.
+209  He rebuilt one result inside his own technique.
+210  Chapters two thirty-seven and two thirty-eight tell you the price.
+211  Kashimo attacks.
+212  Sukuna fires a colossal Dismantle that splits the skyline, and Kashimo recognises it.
+213  In short, that's the attack that ended Gojo.
+214  A slash that cuts the world.
+215  The manga, in the TCB translation, explains why Kashimo survives it; a later chapter restates the rule.
+216  The world-severing Dismantle needs the same hand sign as Malevolent Shrine.
+217  But when Sukuna cut Gojo, he had one arm.
+218  So he took a binding vow on every later use, adding tells.
+219  Hand sign, chant, palm.
+220  That's why Kashimo got a warning and lost only part of a hand.
+221  He dies later in two thirty-eight, to a different attack.
+222  Gojo got nothing. <break time="1.0s" />
+223  Follow the chain.
+224  Gojo's Purple took the hand that would have made the sign.
+225  The missing hand forced the vow.
+226  The vow is why the next man survived it.
+227  Gojo's greatest attack is the reason nobody after him died to it blind.
+
+=== BEAT 10:10  Why everyone missed it ===
+<break time="1.0s" />
+228  So why does everyone miss it?
+229  Because we were handed simpler stories.
+230  Gege Akutami, reportedly at the Osaka exhibition in April 2025, said in short that after beating Mahoraga, Gojo thought Sukuna had no way past Infinity, and the usual Gojo would've sensed something amiss.
+231  That's real.
+232  But it's an author's gloss, not a panel, and it explains why the slash landed, not why it existed.
+233  And Gojo himself, at the airport, tells Geto he's not sure he'd have won even without the Ten Shadows.
+234  Even Gojo files the loss under Ten Shadows.
+235  Not under one arm.
+236  The man who caught the first experiment in two thirty never noticed the second one was already finished in two thirty-four.
+237  He says, in short, that he gave everything, and what makes him sad is that Sukuna couldn't go all out.
+238  Could not.
+239  Not would not.
+240  Megumi's body, no four arms, no second mouth.
+241  Sukuna didn't win on reserve power.
+242  He won on information. <break time="1.5s" />
+
+=== BEAT 11:10  Outro ===
+<break time="1.0s" />
+243  Sukuna's Shibuya answer was, kill it before it learns.
+244  His Shinjuku answer was, let it learn, take notes, then let Gojo kill it for you.
+245  Then the line everyone remembers.
+246  "You were magnificent, Satoru Gojo. I shall never forget you for as long as I live." <break time="5.0s" />
+247  He isn't talking about the fight he won.
+248  He's talking about the one he learned from.
+249  So here's my question.
+250  If Gojo had clocked in chapter two thirty-four that the arm cut was a different kind of attack, and held the Purple, does he win? <break time="2.0s" />
+251  Tell me in the comments, with the chapter.
+252  Next video: the one warning Gojo never got.
+253  We walk that binding vow backwards, from Kashimo to the summon.
