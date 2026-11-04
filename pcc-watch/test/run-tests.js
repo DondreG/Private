@@ -651,6 +651,14 @@ console.log('\nDashboard');
     assert.strictEqual(page.title, 'PCC Watch');
     assert(/width=device-width/.test(page.meta.viewport));
   });
+  check('a lowercase "dashboard" file still works; a missing one shows how to fix it', () => {
+    x.gas.htmlFiles = ['dashboard'];
+    assert.strictEqual(x.code.doGet().file, 'dashboard');
+    x.gas.htmlFiles = [];
+    const page = x.code.doGet();
+    assert(page.file === null && /add.*HTML.*Dashboard/i.test(page.html.replace(/<[^>]+>/g, '')));
+    x.gas.htmlFiles = undefined;
+  });
   x.gas.webAppUrl = 'https://script.google.com/macros/s/example/exec';
   x.gas.now = d(2026, 11, 4, 9, 40);
   appendNps(x.gas, x.nov, 'BR', { date: d(2026, 11, 4), takenBy: 'Damian', p: x.P.ivy });

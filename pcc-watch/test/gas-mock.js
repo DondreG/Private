@@ -287,7 +287,15 @@ function createGas(opts) {
         },
       },
       HtmlService: {
+        createHtmlOutput: (html) => {
+          const out = { file: null, html, title: '', meta: {} };
+          out.setTitle = (t) => { out.title = t; return out; };
+          out.addMetaTag = (k, v) => { out.meta[k] = v; return out; };
+          return out;
+        },
         createHtmlOutputFromFile: (name) => {
+          const have = gas.htmlFiles || ['Dashboard'];
+          if (have.indexOf(name) === -1) throw new Error('No HTML file named ' + name + ' was found.');
           const out = { file: name, title: '', meta: {} };
           out.setTitle = (t) => { out.title = t; return out; };
           out.addMetaTag = (k, v) => { out.meta[k] = v; return out; };

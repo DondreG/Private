@@ -1888,7 +1888,24 @@ function monthsBetween_(from, to) {
  * Rehab" — never "Anyone". Visitors can only call getDashboardData().
  */
 function doGet() {
-  return HtmlService.createHtmlOutputFromFile('Dashboard')
+  // The HTML file must be named "Dashboard" (the editor shows "Dashboard.html").
+  // Tolerate the usual naming slips, and explain if it's missing.
+  var names = ['Dashboard', 'dashboard', 'Dashboard.html', 'dashboard.html'];
+  for (var i = 0; i < names.length; i++) {
+    try {
+      return HtmlService.createHtmlOutputFromFile(names[i])
+        .setTitle('PCC Watch')
+        .addMetaTag('viewport', 'width=device-width, initial-scale=1');
+    } catch (e) {
+      // try the next spelling
+    }
+  }
+  return HtmlService.createHtmlOutput(
+    '<div style="font:16px/1.5 system-ui,sans-serif;max-width:560px;margin:40px auto;padding:0 16px">' +
+    '<h2>PCC Watch: the dashboard page is missing</h2>' +
+    '<p>In the Apps Script editor, click <b>+</b> next to Files, choose <b>HTML</b>, type <b>Dashboard</b> ' +
+    '(just that; the editor adds .html), paste in Dashboard.html and save. Then use ' +
+    '<b>Deploy &rarr; Manage deployments &rarr; Edit &rarr; New version &rarr; Deploy</b>.</p></div>')
     .setTitle('PCC Watch')
     .addMetaTag('viewport', 'width=device-width, initial-scale=1');
 }
