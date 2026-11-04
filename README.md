@@ -1,3 +1,7 @@
+> This repo holds two Apps Script projects:
+> - **[PCC Watch](pcc-watch/README.md)** (`pcc-watch/`). It watches the NPS, the clinic ULs, the PCC Daily Huddle and Patient Responsibility, and tells you when each PCC puts something new on them.
+> - **Authorization Tracking Report** (`apps-script/`), below. It's retired: Danielle's Auth & Script Renewal Tracker, refreshed every weekday from Prompt, replaced it.
+
 # Authorization Tracking Report (weekly)
 
 Automates the manual authorization check the offshore team currently does by
