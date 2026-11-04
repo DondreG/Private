@@ -56,6 +56,7 @@ function createGas(opts) {
       this.data = data || [];
     }
     getName() { return this.name; }
+    setName(n) { this.name = n; return this; }
     getSheetId() { return this.gid; }
     set(r, c, v) {
       while (this.data.length < r) this.data.push([]);
@@ -162,6 +163,10 @@ function createGas(opts) {
 
   const SpreadsheetApp = {
     openById: (id) => {
+      if (gas.failOpen[id] > 0) {
+        gas.failOpen[id]--;
+        throw new Error('Service Spreadsheets failed while accessing document with id ' + id + '.');
+      }
       const f = files[id];
       if (!f || f.kind !== 'sheet' || f.trashed || f.denied) throw new Error('No access to spreadsheet ' + id);
       return f.ss;
@@ -205,11 +210,14 @@ function createGas(opts) {
     computeHmacSha256Signature: (value, key) =>
       Array.from(crypto.createHmac('sha256', key).update(value, 'utf8').digest()).map((b) => (b > 127 ? b - 256 : b)),
     getUuid: () => crypto.randomUUID(),
+    sleep: () => {},
     formatDate,
   };
 
   const gas = {
     now: new Date('2026-11-04T12:05:00Z'),
+    failOpen: {},
+    mailDown: false,
     clock() { return gas.now.getTime(); },
     files,
     props,
@@ -236,10 +244,16 @@ function createGas(opts) {
         getScriptProperties: () => ({
           getProperty: (k) => (k in props ? props[k] : null),
           setProperty: (k, v) => { props[k] = String(v); },
+          deleteProperty: (k) => { delete props[k]; },
         }),
       },
       LockService: { getScriptLock: () => ({ tryLock: () => true, releaseLock: () => {} }) },
-      MailApp: { sendEmail: (o) => mail.push(Object.assign({ at: new Date(gas.now) }, o)) },
+      MailApp: {
+        sendEmail: (o) => {
+          if (gas.mailDown) throw new Error('Service invoked too many times for one day: email.');
+          mail.push(Object.assign({ at: new Date(gas.now) }, o));
+        },
+      },
       ScriptApp: {
         getProjectTriggers: () => triggers.slice(),
         deleteTrigger: (t) => { triggers = triggers.filter((x) => x !== t); },

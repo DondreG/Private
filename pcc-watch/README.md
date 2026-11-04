@@ -23,6 +23,9 @@ You also get email (to yourself):
 - **1 PM on weekdays:** one "no activity yet" email listing the PCC clinics with
   nothing new today. It's skipped on days the watcher didn't start before 10 AM.
 - **4 PM on weekdays:** a summary of the day per PCC.
+- **If a source can't be read for two checks in a row** (a file moved, un-shared, or
+  next month's NPS isn't visible yet): one email saying which, so you know the watcher
+  is blind there. The problem also shows in red at the top of the Today tab.
 
 ## What counts, and who gets credit
 
@@ -32,8 +35,8 @@ You also get email (to yourself):
 | | Taken By filled in later, or changed from `Auto` / `AI Agent` to a PCC | That PCC: **new entry**, or **claimed lead** |
 | | Taken By is a clinic name (`Somerset`, `EB Clinic`) | That clinic's PCC, marked **probable** (Alexa and Tiago type the clinic, not their name) |
 | UL (this week's tab and future weeks' tabs) | New patient row · **# SCHED** went up · new care-note line · **Reason not scheduled** set | The clinic's PCC. A note is credited to its signer when signed with a Roster tag (`[MARI]`, `-BV`, `[EMILY]`, `-TC`). Notes signed by non-PCC staff (`[JEROME]`, `[JIBRIL]`, `- AS` …) aren't credited to anyone. |
-| PCC Daily Huddle | **Booked? (PCC)** filled on the nothing-booked list (clinic tab or All PCC Clinics; counted once) | The clinic's PCC |
-| Patient Responsibility / Huddle pay table | **Collected?** filled (TODAY or TOMORROW; counted once across both sheets) | The clinic's PCC |
+| PCC Daily Huddle | **Booked? (PCC)** filled on the nothing-booked list (clinic tab or All PCC Clinics; counted once). `yes` counts as booked; `no` or anything else counts as "worked, not booked". | The clinic's PCC |
+| Patient Responsibility / Huddle pay table | **Collected?** filled (TODAY or TOMORROW; counted once across both sheets). `Yes - Full`, `Partial` and `Card on File` count as collected; dollars are added only for `Yes - Full`. `No`, `$0 Owed` and anything else count as "nothing collected". | The clinic's PCC |
 
 Not counted as PCC work: rows entered by Auto, AI Agent or central staff
 (Lana, Elijah, Lynni, Tiffany, Pia …), Danielle's morning rebuilds of the
@@ -58,6 +61,9 @@ access. Nothing it stores or sends identifies a patient:
   Script Properties.
 - Care notes are stored only as hashes of each line. Note text is read in
   memory to find a signature tag, then discarded.
+- "Booked?", "Collected?" and "Reason not scheduled" can hold free text. Only
+  their category is stored or shown (`yes`/`no`, `Partial`, `Work`, …), with
+  `other` / `Other` for anything typed outside the list, never the text itself.
 - The Activity tab, Today tab and emails name the PCC, clinic, what changed
   and a **link to the row**. They never contain a patient name, DOB, phone,
   account # or note text.
@@ -103,7 +109,8 @@ Other functions you can run from the dropdown:
 | `runNow` | Run a check now, even outside the schedule. |
 | `removeTriggers` | Stop the watcher. Keeps the sheet. |
 | `installTrigger` | Start it again, or apply a new `TRIGGER_EVERY_MINUTES`. |
-| `resetSnapshots` | Forget all snapshots. The next check re-baselines silently. Use it if a source sheet was restructured. |
+| `resetSnapshots` | Forget all snapshots. The next check re-baselines silently. Use it if a source sheet was restructured, or if the state file got damaged. |
+| `forgetOutputSheet` | Only if you deleted the PCC Watch sheet: run this, then `setup` makes a new one. You'll need to re-enter Roster edits. |
 
 To change the schedule, emails or retention, edit `CONFIG`:
 - `RUN_DAYS`, `RUN_FROM_HOUR`, `RUN_TO_HOUR`
@@ -112,7 +119,13 @@ To change the schedule, emails or retention, edit `CONFIG`:
 - `LOG_DAYS_KEPT`
 
 If a source moves (a new UL file, a new Huddle), update its ID in `CONFIG`.
-New monthly NPS files are found by title automatically.
+New monthly NPS files are found by title automatically. The UL files are
+per year ("UL 2026"). When the 2027 files start, put their IDs in
+`UL_FILES`. Until you do, the Today tab and the "can't read" email will flag it.
+
+If Google has a passing problem opening a file, the check retries and then
+skips that run. It never starts a new PCC Watch sheet or forgets what it
+has seen, so nothing gets logged twice or missed.
 
 ## Tests
 
@@ -129,3 +142,20 @@ simulate a full day plus the next morning's rebuilds and check:
 - email batching and the once-a-day emails
 - an unreadable source
 - the privacy check above
+
+There is also one regression test for each issue found in an independent
+review:
+- Google hiccups and a damaged state file
+- mail outages
+- free text in the mark columns
+- non-PCC note signers
+- tag look-alikes
+- marks made right after a rebuild
+- a patient added to two week tabs
+- re-credited NPS rows
+- a missing NPS
+- out-of-order Activity rows
+- late-evening events
+- stale Huddle targets
+- tabs you add
+- invalid trigger intervals

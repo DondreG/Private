@@ -175,11 +175,24 @@ var EVENT_TYPES = {
   scheduled: { source: 'UL', label: 'Scheduled visits on the UL', counter: 'ulScheduled' },
   note: { source: 'UL', label: 'Added a UL care note', counter: 'ulNotes' },
   reason: { source: 'UL', label: 'Set a reason not scheduled', counter: 'ulReasons' },
-  booked: { source: 'Huddle', label: 'Marked "Booked?" on the Huddle', counter: 'booked' },
-  collected: { source: 'Collections', label: 'Marked "Collected?"', counter: 'collected' },
+  booked: { source: 'Huddle', label: 'Marked booked on the Huddle', counter: 'booked' },
+  not_booked: { source: 'Huddle', label: 'Worked the Huddle list: not booked', counter: 'bookedNo' },
+  collected: { source: 'Collections', label: 'Marked collected', counter: 'collected' },
+  not_collected: { source: 'Collections', label: 'Marked nothing collected', counter: 'collectedNo' },
   info: { source: 'Watcher', label: 'Note', counter: null },
 };
-var COUNTERS = ['npsNew', 'npsClaimed', 'ulNew', 'ulScheduled', 'ulNotes', 'ulReasons', 'booked', 'collected'];
+var COUNTERS = ['npsNew', 'npsClaimed', 'ulNew', 'ulScheduled', 'ulNotes', 'ulReasons', 'booked', 'bookedNo',
+  'collected', 'collectedNo'];
+
+// "Booked?" and "Collected?" are free text in places, so only these classes
+// are ever stored or shown — never what someone typed.
+var COLLECTED_CLASSES = ['yes - full', 'partial', 'card on file', '$0 owed', 'no'];
+var COLLECTED_COUNTS_AS_COLLECTED = ['yes - full', 'partial', 'card on file'];
+
+// REASON NOT SCHEDULED dropdown values. Anything else is logged as "Other".
+var UL_REASONS = ['See MD', 'MD Hold', 'Hospitalized', 'Transportation', 'Work', 'Away', 'Sick', 'Auth'];
+
+var VALID_TRIGGER_MINUTES = [1, 5, 10, 15, 30];
 
 var ACTIVITY_HEADERS = ['When', 'PCC', 'Clinic', 'Source', 'What', 'Detail', 'Row', 'How we know'];
 var ROSTER_HEADERS = ['PCC', 'Clinic', 'NPS "Taken By" names', 'UL note tags', 'Active (Y/N)'];
@@ -221,6 +234,9 @@ function runNow() {
 
 /** Re-schedules runWatch. Safe to run again after changing the interval. */
 function installTrigger() {
+  if (VALID_TRIGGER_MINUTES.indexOf(CONFIG.TRIGGER_EVERY_MINUTES) === -1) {
+    throw new Error('TRIGGER_EVERY_MINUTES must be one of ' + VALID_TRIGGER_MINUTES.join(', '));
+  }
   removeTriggers();
   ScriptApp.newTrigger('runWatch').timeBased().everyMinutes(CONFIG.TRIGGER_EVERY_MINUTES).create();
 }
@@ -237,11 +253,23 @@ function removeTriggers() {
  * e.g. after a sheet was restructured.
  */
 function resetSnapshots() {
-  var state = loadState();
   var fresh = newState();
-  fresh.day = state.day;
-  fresh.notify = state.notify;
+  try {
+    var state = loadState();
+    fresh.day = state.day;
+    fresh.notify = state.notify;
+  } catch (e) {
+    Logger.log('Old state unreadable (' + errorText(e) + '); starting clean.');
+  }
   saveState(fresh);
+}
+
+/**
+ * Use only if the PCC Watch sheet was deleted: forgets it, and the next
+ * setup() creates a new one (with a fresh Roster tab to fill in again).
+ */
+function forgetOutputSheet() {
+  PropertiesService.getScriptProperties().deleteProperty(OUTPUT_ID_PROPERTY);
 }
 
 // ---------------------------------------------------------------------------
@@ -273,23 +301,31 @@ function runWatchAt(now, opts) {
     };
     rollDay(ctx);
 
+    // A watcher that fails part-way keeps its old snapshot, so its events
+    // are dropped here and found again on the next run (never logged twice).
     [
       ['NPS', watchNps],
       ['UL', watchUl],
       ['Huddle', watchHuddle],
       ['Patient Responsibility', watchResponsibility],
     ].forEach(function (w) {
-      try {
-        w[1](ctx);
-      } catch (e) {
-        ctx.errors.push(w[0] + ': ' + errorText(e));
-      }
+      guarded(ctx, w[0], function () { w[1](ctx); });
     });
 
+    // Activity is the record: if writing it fails, nothing is saved and the
+    // next run retries. After it's written, the snapshot must be saved.
     countEvents(ctx);
     writeActivity(output, ctx);
-    writeToday(output, ctx);
-    notify(output, ctx);
+    try {
+      notify(output, ctx);
+    } catch (e) {
+      ctx.errors.push('Email: ' + errorText(e));
+    }
+    try {
+      writeToday(output, ctx);
+    } catch (e) {
+      Logger.log('Today tab not updated: ' + errorText(e));
+    }
     saveState(ctx.state);
   } finally {
     lock.releaseLock();
@@ -304,14 +340,36 @@ function inRunWindow(now) {
   return CONFIG.RUN_DAYS.indexOf(day) !== -1 && hour >= CONFIG.RUN_FROM_HOUR && hour < CONFIG.RUN_TO_HOUR;
 }
 
-/** New day: reset today's counters and the once-a-day emails. */
+/**
+ * Runs `fn` (one source, or one file of a source). If it throws, the events
+ * it added and its per-day dedupe marks are rolled back and the error is
+ * shown on the Today tab; the source's old snapshot stays, so the next run
+ * finds the same changes again.
+ */
+function guarded(ctx, label, fn) {
+  var events = ctx.events.length;
+  var seen = JSON.stringify(ctx.state.day.seen);
+  try {
+    fn();
+  } catch (e) {
+    ctx.events.length = events;
+    ctx.state.day.seen = JSON.parse(seen);
+    ctx.errors.push(label + ': ' + errorText(e));
+  }
+}
+
+/**
+ * New day: reset today's counters and the once-a-day emails. New-patient
+ * events found after the last email of yesterday are kept so they still
+ * go out (first thing this morning).
+ */
 function rollDay(ctx) {
   var day = ctx.state.day;
   if (day.date === ctx.today) return;
   ctx.state.day = {
     date: ctx.today, firstRun: ctx.now.getTime(), counts: {}, last: {}, seen: {}, quietSent: false, summarySent: false,
   };
-  ctx.state.notify.pending = [];
+  ctx.state.notify.pending = ctx.state.notify.pending.filter(isHeadline);
 }
 
 // ---------------------------------------------------------------------------
@@ -321,30 +379,43 @@ function rollDay(ctx) {
 /**
  * Watches this month's NPS, last month's for the first few days of a
  * month, and next month's once Jenny creates it. A file or tab seen for the
- * first time is a silent baseline.
+ * first time is a silent baseline. Only the clinic tabs in
+ * CONFIG.NPS_CLINIC_TABS are read.
  */
 function watchNps(ctx) {
   var inScope = {};
+  var thisMonth = parseIsoDate(ctx.today).getMonth();
   npsMonths(ctx.now).forEach(function (month) {
+    var label = MONTH_NAMES[month.getMonth()] + ' ' + month.getFullYear();
     var file = findNpsFile(MONTH_NAMES[month.getMonth()], String(month.getFullYear()));
-    if (!file) return;
+    if (!file) {
+      if (month.getMonth() === thisMonth) {
+        ctx.errors.push('NPS: no "' + label + ' New Patient Spreadsheet" visible to this account');
+      }
+      return;
+    }
     var id = file.getId();
     inScope[id] = true;
-    var prev = ctx.state.nps[id];
-    var updated = file.getLastUpdated().getTime();
-    if (prev && prev.updated === updated) return;
+    guarded(ctx, 'NPS ' + label, function () {
+      var prev = ctx.state.nps[id];
+      var updated = file.getLastUpdated().getTime();
+      if (prev && prev.updated === updated) return;
 
-    var ss = SpreadsheetApp.openById(id);
-    var tz = ss.getSpreadsheetTimeZone();
-    var cur = { updated: updated, tabs: {} };
-    ss.getSheets().forEach(function (sheet) {
-      var tab = readNpsTab(sheet, tz, ctx.secret);
-      if (!tab) return;
-      var name = sheet.getName();
-      cur.tabs[name] = tab.rows;
-      if (prev && prev.tabs[name]) diffNpsTab(ctx, prev.tabs[name], tab.rows, ss, sheet, tz);
+      var ss = SpreadsheetApp.openById(id);
+      var tz = ss.getSpreadsheetTimeZone();
+      // `credited`: rows already credited to a PCC this month, so clearing
+      // and restoring a row (or a duplicate shifting) never credits it twice.
+      var cur = { updated: updated, tabs: {}, credited: (prev && prev.credited) || {} };
+      ss.getSheets().forEach(function (sheet) {
+        var name = sheet.getName();
+        if (!CONFIG.NPS_CLINIC_TABS[name]) return;
+        var tab = readNpsTab(sheet, tz, ctx.secret);
+        if (!tab) return;
+        cur.tabs[name] = tab.rows;
+        if (prev && prev.tabs[name]) diffNpsTab(ctx, prev.tabs[name], tab.rows, ss, sheet, cur.credited);
+      });
+      ctx.state.nps[id] = cur;
     });
-    ctx.state.nps[id] = cur;
   });
   Object.keys(ctx.state.nps).forEach(function (id) {
     if (!inScope[id]) delete ctx.state.nps[id];
@@ -405,8 +476,9 @@ function readNpsTab(sheet, tz, secret) {
  *     "AI Agent" to a PCC -> claimed_lead.
  *   - A row whose key changed but kept its row number and Taken By is a
  *     corrected name or date, not a new entry.
+ *   - A row is credited at most once (`credited`, kept for the month).
  */
-function diffNpsTab(ctx, before, now, ss, sheet, tz) {
+function diffNpsTab(ctx, before, now, ss, sheet, credited) {
   var removedAtRow = {};
   Object.keys(before).forEach(function (k) {
     if (!now[k]) removedAtRow[before[k].r] = before[k];
@@ -435,6 +507,9 @@ function diffNpsTab(ctx, before, now, ss, sheet, tz) {
     var who = attributeTakenBy(ctx.roster, cur.t);
     if (!who) return;
     if (type === 'claimed_lead' && attributeTakenBy(ctx.roster, was ? was.t : '')) return;
+    var base = tabName + '|' + k.split('#')[0];
+    if (credited[base]) return;
+    credited[base] = 1;
     addEvent(ctx, {
       type: type,
       who: who,
@@ -475,19 +550,20 @@ function watchUl(ctx) {
   var monday = mondayOf(ctx.now, ctx.tz);
   var lastWatched = addDays(monday, 7 * CONFIG.UL_WEEKS_AHEAD);
   Object.keys(CONFIG.UL_FILES).forEach(function (clinic) {
-    try {
+    guarded(ctx, 'UL ' + clinic, function () {
       var id = CONFIG.UL_FILES[clinic];
       var updated = DriveApp.getFileById(id).getLastUpdated().getTime();
       var prev = ctx.state.ul[clinic];
       if (prev && prev.updated === updated) return;
 
       var ss = SpreadsheetApp.openById(id);
+      var tz = ss.getSpreadsheetTimeZone();
       var cur = { updated: updated, tabs: {} };
       ss.getSheets().forEach(function (sheet) {
         var name = sheet.getName();
         var week = parseUlTabDate(name);
         if (!week || week < monday || week > lastWatched) return;
-        var tab = readUlTab(sheet, ctx.secret);
+        var tab = readUlTab(sheet, ctx.secret, tz);
         if (!tab) return;
         cur.tabs[name] = tab.rows;
         if (!prev) return;
@@ -504,22 +580,26 @@ function watchUl(ctx) {
         diffUlTab(ctx, clinic, prev.tabs[name], tab, ss, sheet);
       });
       ctx.state.ul[clinic] = cur;
-    } catch (e) {
-      ctx.errors.push('UL ' + clinic + ': ' + errorText(e));
+    });
+    // Checked every run, not just when the file changed (e.g. the 2026 file
+    // after the year ends): a UL with no tab for this week is a blind spot.
+    var st = ctx.state.ul[clinic];
+    if (st && !Object.keys(st.tabs).some(function (n) { return parseUlTabDate(n) >= monday; })) {
+      ctx.errors.push('UL ' + clinic + ': no tab for this week or later');
     }
   });
 }
 
 /**
- * Snapshot of one UL week tab: { rows: { key: { r, d, n, i, s } }, notes }
+ * Snapshot of one UL week tab: { rows: { key: { r, d, n, i, s } }, lines }
  * key = HMAC(patient name) with an occurrence suffix; r = sheet row;
  * d = # SCHED; n = hashes of each care-note line; i = reason not scheduled
- * (dropdown value, first word only); s = hash of the row's fixed columns
- * (RX FREQ, RX END, POC END DATE, IE) used to spot a renamed row. `notes`
- * holds the note text in memory only (to read signature tags) and is
- * never saved.
+ * (one of UL_REASONS or "Other"); s = hash of RX END + POC END DATE + RX
+ * FREQ + IE, only when a date is filled (new rows have none), used to spot
+ * a renamed row. `lines` holds each row's note lines with their hashes in
+ * memory only (to read signature tags) and is never saved.
  */
-function readUlTab(sheet, secret) {
+function readUlTab(sheet, secret, tz) {
   var last = sheet.getLastRow();
   if (last < 2) return null;
   var width = Math.min(sheet.getLastColumn(), 26);
@@ -529,98 +609,96 @@ function readUlTab(sheet, secret) {
     patient: 'patient name', sched: '# sched', notes: 'patient care notes',
     reason: 'reason not scheduled', rxFreq: 'rx freq', rxEnd: 'rx end', pocEnd: 'poc end date', ie: 'ie',
   });
-  if (!h || h.cols.patient === null || h.cols.sched === null) return null;
+  if (!h) return null;
 
   var rows = {};
-  var notes = {};
+  var lines = {};
   var firstRow = h.row + 2;
-  if (last < firstRow) return { rows: rows, notes: notes };
+  if (last < firstRow) return { rows: rows, lines: lines };
   var readWidth = 0;
   Object.keys(h.cols).forEach(function (k) {
     if (h.cols[k] !== null) readWidth = Math.max(readWidth, h.cols[k] + 1);
   });
   var values = sheet.getRange(firstRow, 1, last - firstRow + 1, readWidth).getValues();
   var occ = {};
+  var cell = function (row, c) { return h.cols[c] === null ? '' : cellKey(row[h.cols[c]], tz); };
   values.forEach(function (row, i) {
     var name = normalizeName(row[h.cols.patient]);
     if (!name) return;
     var key = occurrenceKey(occ, hmac(secret, 'ul|' + name));
-    var noteText = h.cols.notes === null ? '' : String(row[h.cols.notes] || '');
-    var fixed = ['rxFreq', 'rxEnd', 'pocEnd', 'ie'].map(function (c) {
-      return h.cols[c] === null ? '' : cellKey(row[h.cols[c]]);
-    }).join('|');
+    var noteLinesHashed = noteLines(row[h.cols.notes]).map(function (text) {
+      return { text: text, h: hmac(secret, 'note|' + text.toLowerCase()).substring(0, 8) };
+    });
+    var dates = cell(row, 'rxEnd') + cell(row, 'pocEnd');
     rows[key] = {
       r: firstRow + i,
       d: toNumber(row[h.cols.sched]) || 0,
-      n: noteLineHashes(secret, noteText),
+      n: noteLinesHashed.map(function (l) { return l.h; }),
       i: h.cols.reason === null ? '' : reasonWord(row[h.cols.reason]),
-      s: hmac(secret, 'ulrow|' + fixed).substring(0, 8),
+      s: dates ? hmac(secret, 'ulrow|' + [cell(row, 'rxFreq'), cell(row, 'rxEnd'), cell(row, 'pocEnd'),
+        cell(row, 'ie')].join('|')).substring(0, 8) : '',
     };
-    notes[key] = noteText;
+    lines[key] = noteLinesHashed;
   });
-  return { rows: rows, notes: notes };
+  return { rows: rows, lines: lines };
 }
 
 /**
  * Compares two snapshots of one UL week tab. Rows are matched by key, so
  * re-sorting (Brick re-sorts by status after every edit) is harmless.
- *   - New patient row -> new_patient (unless a row with identical fixed
- *     columns disappeared at the same time: a corrected name).
+ *   - New patient row -> new_patient, once per clinic per day even if it's
+ *     added to this week's and next week's tab (unless a row with the same
+ *     dates disappeared at the same time: a corrected name).
  *   - # SCHED went up -> scheduled.
- *   - A care-note line that wasn't there before -> note, credited to the
- *     signer when the line carries a known tag, to nobody when it's signed
- *     by non-PCC staff, else to the clinic's PCC.
+ *   - A care-note line that wasn't there before -> note.
  *   - Reason not scheduled filled or changed -> reason.
+ * Who: the signer of a note line added with the change when it carries a
+ * Roster tag; nobody when it's signed by non-PCC staff (OTHER_STAFF_TAGS);
+ * otherwise the clinic's PCC.
  */
 function diffUlTab(ctx, clinic, before, tab, ss, sheet) {
   var name = sheet.getName();
-  var removedSig = {};
-  Object.keys(before).forEach(function (k) {
-    if (!tab.rows[k]) removedSig[before[k].s] = (removedSig[before[k].s] || 0) + 1;
+  var removed = Object.keys(before).filter(function (k) { return !tab.rows[k]; }).map(function (k) {
+    return before[k];
   });
 
   Object.keys(tab.rows).forEach(function (k) {
     var cur = tab.rows[k];
     var was = before[k];
-    var link = rowLink(ss, sheet, cur.r);
-    var linkLabel = clinic + ' UL ' + name + ' row ' + cur.r;
-    var lines = newNoteLines(ctx.secret, tab.notes[k], was ? was.n : []);
+    var lines = newNoteLines(tab.lines[k] || [], was ? was.n : []);
     var who = attributeUlLines(ctx.roster, clinic, lines);
+    if (!who) return;
+    var event = function (type, detail) {
+      addEvent(ctx, {
+        type: type, who: who, detail: 'Week of ' + name + detail,
+        link: rowLink(ss, sheet, cur.r), linkLabel: clinic + ' UL ' + name + ' row ' + cur.r,
+      });
+    };
 
     if (!was) {
-      if (removedSig[cur.s]) {
-        removedSig[cur.s]--;
-        return;
-      }
-      if (!who) return;
-      addEvent(ctx, {
-        type: 'new_patient', who: who, link: link, linkLabel: linkLabel,
-        detail: 'Week of ' + name + (cur.d ? ' · # SCHED ' + cur.d : ''),
-      });
+      if (takeRename(removed, cur)) return;
+      var dayKey = 'uln|' + clinic + '|' + k.split('#')[0];
+      if (ctx.state.day.seen[dayKey]) return;
+      ctx.state.day.seen[dayKey] = 1;
+      event('new_patient', cur.d ? ' · # SCHED ' + cur.d : '');
       return;
     }
-
-    var clinicPcc = clinicWho(ctx.roster, clinic);
-    if (cur.d > was.d) {
-      addEvent(ctx, {
-        type: 'scheduled', who: clinicPcc, link: link, linkLabel: linkLabel,
-        detail: 'Week of ' + name + ' · # SCHED ' + was.d + ' → ' + cur.d,
-      });
-    }
-    if (lines.length && who) {
-      var tag = lines.tag ? ' · signed ' + lines.tag : '';
-      addEvent(ctx, {
-        type: 'note', who: who, link: link, linkLabel: linkLabel,
-        detail: 'Week of ' + name + tag,
-      });
-    }
-    if (cur.i && cur.i !== was.i) {
-      addEvent(ctx, {
-        type: 'reason', who: clinicPcc, link: link, linkLabel: linkLabel,
-        detail: 'Week of ' + name + ' · ' + cur.i,
-      });
-    }
+    if (cur.d > was.d) event('scheduled', ' · # SCHED ' + was.d + ' → ' + cur.d);
+    if (lines.length) event('note', lines.tag ? ' · signed ' + lines.tag : '');
+    if (cur.i && cur.i !== was.i) event('reason', ' · ' + cur.i);
   });
+}
+
+/** Removes and returns true for a vanished row with the same dates as `cur` (a renamed row). */
+function takeRename(removed, cur) {
+  if (!cur.s) return false;
+  for (var i = 0; i < removed.length; i++) {
+    if (removed[i].s === cur.s) {
+      removed.splice(i, 1);
+      return true;
+    }
+  }
+  return false;
 }
 
 /** "11.2.26" -> Date (local midnight), or null for any other tab name. */
@@ -631,13 +709,7 @@ function parseUlTabDate(name) {
   return d.getMonth() === Number(m[1]) - 1 ? d : null;
 }
 
-/** Hashes of each non-blank line of a care note. */
-function noteLineHashes(secret, text) {
-  return noteLines(text).map(function (line) {
-    return hmac(secret, 'note|' + line.toLowerCase()).substring(0, 8);
-  });
-}
-
+/** Non-blank lines of a care note, whitespace collapsed. */
 function noteLines(text) {
   return String(text || '').split(/\r?\n/).map(function (s) {
     return s.replace(/\s+/g, ' ').trim();
@@ -645,13 +717,13 @@ function noteLines(text) {
 }
 
 /**
- * Lines of `text` whose hash isn't in `oldHashes` (array of the new lines'
- * text, in memory only), with `.tag` = the first known signature tag found
- * in them (roster or OTHER_STAFF_TAGS), if any.
+ * The note lines (from readUlTab, in memory) whose hash isn't in
+ * `oldHashes`, as text, with `.tag` = the last known signature tag in the
+ * newest of them (a Roster tag or OTHER_STAFF_TAGS), or ''.
  */
-function newNoteLines(secret, text, oldHashes) {
-  var added = noteLines(text).filter(function (line) {
-    return oldHashes.indexOf(hmac(secret, 'note|' + line.toLowerCase()).substring(0, 8)) === -1;
+function newNoteLines(lines, oldHashes) {
+  var added = lines.filter(function (l) { return oldHashes.indexOf(l.h) === -1; }).map(function (l) {
+    return l.text;
   });
   added.tag = '';
   for (var i = added.length - 1; i >= 0 && !added.tag; i--) {
@@ -660,17 +732,19 @@ function newNoteLines(secret, text, oldHashes) {
   return added;
 }
 
-/** Candidate signature tags in a note line: [MARI], "- BV", "(PR 11/4)". */
+/**
+ * Candidate signature tags in a note line, left to right: [MARI] (any
+ * case), "- BV" and "(PR 11/4)" (capitals only, so "- as discussed" or
+ * "(as needed)" aren't read as initials).
+ */
 function signatureTags(line) {
-  var tags = [];
-  var m;
-  var bracket = /\[([A-Za-z]{2,12})\]/g;
-  while ((m = bracket.exec(line)) !== null) tags.push(m[1].toUpperCase());
-  var dash = /(?:^|\s)[-–]\s?([A-Za-z]{2,3})\b/g;
-  while ((m = dash.exec(line)) !== null) tags.push(m[1].toUpperCase());
-  var paren = /\(([A-Za-z]{2,3})\b[^)]*\)/g;
-  while ((m = paren.exec(line)) !== null) tags.push(m[1].toUpperCase());
-  return tags;
+  var found = [];
+  [/\[([A-Za-z]{2,12})\]/g, /(?:^|\s)[-–]\s?([A-Z]{2,3})\b/g, /\(([A-Z]{2,3})\b[^)]*\)/g].forEach(function (re) {
+    var m;
+    while ((m = re.exec(line)) !== null) found.push({ at: m.index, tag: m[1].toUpperCase() });
+  });
+  found.sort(function (a, b) { return a.at - b.at; });
+  return found.map(function (f) { return f.tag; });
 }
 
 /** Last candidate that is a roster tag or a known other-staff tag, else ''. */
@@ -694,15 +768,14 @@ function attributeUlLines(roster, clinic, lines) {
   return clinicWho(roster, clinic);
 }
 
-/** "Work", "Away", "See MD", ... (first word of a free-text value). */
+/** The UL_REASONS value a cell starts with, "Other" for anything else, '' if blank. */
 function reasonWord(v) {
-  var s = String(v || '').replace(/\s+/g, ' ').trim();
+  var s = lc(v);
   if (!s) return '';
-  var known = ['See MD', 'MD Hold'];
-  for (var i = 0; i < known.length; i++) {
-    if (s.toLowerCase().indexOf(known[i].toLowerCase()) === 0) return known[i];
+  for (var i = 0; i < UL_REASONS.length; i++) {
+    if (s.indexOf(UL_REASONS[i].toLowerCase()) === 0) return UL_REASONS[i];
   }
-  return s.split(' ')[0].replace(/[^A-Za-z]/g, '').substring(0, 20);
+  return 'Other';
 }
 
 // ---------------------------------------------------------------------------
@@ -738,10 +811,10 @@ function watchHuddle(ctx) {
     if (!isAll) readPaySection(values, name, ctx.secret, marks, ss, sheet, tz);
   });
 
-  var rebuilt = title !== st.title;
-  if (!rebuilt) diffMarks(ctx, st.marks || {}, marks);
+  diffAfterRebuild(ctx, st, title, marks);
   ctx.state.huddle = {
     title: title,
+    date: titleDate(title),
     updated: updated,
     targets: readHuddleSummary(summaryValues),
     marks: storedMarks(marks),
@@ -769,7 +842,7 @@ function readBookedSection(values, clinic, secret, marks, ss, sheet) {
     var acct = String(row[h.acct] || '').trim();
     if (!acct) continue;
     var key = 'b|' + rowClinic + '|' + hmac(secret, 'acct|' + acct);
-    var mark = lc(row[h.booked]);
+    var mark = markClass(row[h.booked], 'booked');
     if (!marks[key] || (!marks[key].m && mark)) {
       marks[key] = { m: mark, clinic: rowClinic, link: rowLink(ss, sheet, i + 1), linkLabel: sheet.getName() + ' row ' + (i + 1) };
     }
@@ -795,7 +868,7 @@ function readPaySection(values, clinic, secret, marks, ss, sheet, tz) {
       }
       var key = payKey(secret, clinic, row, cols, occ, tz);
       marks[key] = {
-        m: lc(row[cols.collected]),
+        m: markClass(row[cols.collected], 'collected'),
         clinic: clinic,
         dollars: toNumber(row[cols.total]) || 0,
         link: rowLink(ss, sheet, i + 1),
@@ -874,7 +947,7 @@ function watchResponsibility(ctx) {
       for (var i = hdr + 1; i < values.length && isTimeCell(values[i][0], tz); i++) {
         var key = payKey(ctx.secret, clinic, values[i], cols, occ, tz) + (section === 'tomorrow' ? '|t' : '');
         marks[key] = {
-          m: lc(values[i][cols.collected]),
+          m: markClass(values[i][cols.collected], 'collected'),
           clinic: clinic,
           dollars: toNumber(values[i][cols.total]) || 0,
           tomorrow: section === 'tomorrow',
@@ -885,10 +958,12 @@ function watchResponsibility(ctx) {
     }
   });
 
-  var rebuilt = title !== st.title;
-  if (!rebuilt) diffMarks(ctx, st.marks || {}, marks);
+  diffAfterRebuild(ctx, st, title, marks);
   var sums = readResponsibilitySummary(summaryValues);
-  ctx.state.pr = { title: title, updated: updated, today: sums.today, yesterday: sums.yesterday, marks: storedMarks(marks) };
+  ctx.state.pr = {
+    title: title, date: titleDate(title), updated: updated, today: sums.today, yesterday: sums.yesterday,
+    marks: storedMarks(marks),
+  };
 }
 
 /**
@@ -947,31 +1022,66 @@ function payKey(secret, clinic, row, cols, occ, tz) {
 }
 
 /**
- * Blank -> filled marks become booked / collected events. A patient counts
- * once per day even if marked in two places (clinic tab and All PCC
- * Clinics, Huddle and Patient Responsibility) or re-marked after a rebuild.
+ * The morning rebuild (title changes) starts every mark blank, so after a
+ * rebuild every filled mark is new: made between the rebuild and this
+ * check. The very first sighting of the sheet is a silent baseline.
+ */
+function diffAfterRebuild(ctx, st, title, marks) {
+  if (!st.title) return;
+  diffMarks(ctx, title === st.title ? (st.marks || {}) : {}, marks);
+}
+
+/**
+ * Blank -> filled marks become events: Booked? "yes" -> booked, anything
+ * else -> not_booked; Collected? "Yes - Full" / "Partial" / "Card on File"
+ * -> collected (dollars counted only for Yes - Full on today's visits),
+ * "No" / "$0 Owed" / anything else -> not_collected. A patient counts once
+ * per day even if marked in two places (clinic tab and All PCC Clinics,
+ * Huddle and Patient Responsibility) or re-marked after a rebuild.
  */
 function diffMarks(ctx, before, now) {
   Object.keys(now).forEach(function (key) {
     var cur = now[key];
-    if (!cur.m || before[key] === cur.m) return;
-    if (before[key]) return;
+    if (!cur.m || before[key]) return;
     var dayKey = key.replace(/\|t$/, '');
     if (ctx.state.day.seen[dayKey]) return;
     ctx.state.day.seen[dayKey] = 1;
-    var booked = key.indexOf('b|') === 0;
-    addEvent(ctx, {
-      type: booked ? 'booked' : 'collected',
-      who: clinicWho(ctx.roster, cur.clinic),
-      link: cur.link,
-      linkLabel: cur.linkLabel,
-      dollars: booked ? 0 : cur.dollars,
-      detail: booked
-        ? 'Marked "' + cur.m + '"'
-        : 'Marked "' + cur.m + '"' + (cur.dollars ? ' · $' + cur.dollars.toFixed(2) + ' to collect' : '') +
-          (cur.tomorrow ? ' · tomorrow\'s new patient' : ''),
-    });
+    var said = cur.m === 'other' ? 'Marked with other text' : 'Marked "' + cur.m + '"';
+    var e = { who: clinicWho(ctx.roster, cur.clinic), link: cur.link, linkLabel: cur.linkLabel };
+    if (key.indexOf('b|') === 0) {
+      e.type = cur.m === 'yes' ? 'booked' : 'not_booked';
+      e.detail = said;
+    } else {
+      e.type = COLLECTED_COUNTS_AS_COLLECTED.indexOf(cur.m) !== -1 ? 'collected' : 'not_collected';
+      e.dollars = cur.m === 'yes - full' && !cur.tomorrow ? cur.dollars : 0;
+      e.detail = said + (cur.dollars ? ' · $' + cur.dollars.toFixed(2) + ' to collect' : '') +
+        (cur.tomorrow ? ' · tomorrow\'s new patient' : '');
+    }
+    addEvent(ctx, e);
   });
+}
+
+/**
+ * Booked? -> 'yes' | 'no' | 'other'; Collected? -> one of
+ * COLLECTED_CLASSES or 'other'; '' when blank. Only this class is stored
+ * or shown, never the typed text.
+ */
+function markClass(v, kind) {
+  var s = lc(v);
+  if (!s) return '';
+  var yes = /^y(es)?\b/.test(s);
+  if (kind === 'booked') return yes ? 'yes' : /^no?\b/.test(s) ? 'no' : 'other';
+  if (yes) return 'yes - full';
+  for (var i = 0; i < COLLECTED_CLASSES.length; i++) {
+    if (s.indexOf(COLLECTED_CLASSES[i]) === 0) return COLLECTED_CLASSES[i];
+  }
+  return 'other';
+}
+
+/** "PCC Daily Huddle - Wed 11/04/2026" -> "2026-11-04" ('' if no date). */
+function titleDate(title) {
+  var m = String(title || '').match(/(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+  return m ? m[3] + '-' + ('0' + m[1]).slice(-2) + '-' + ('0' + m[2]).slice(-2) : '';
 }
 
 /** What's kept between runs: just the mark per key. */
@@ -1097,7 +1207,7 @@ function countEvents(ctx) {
   });
 }
 
-/** Newest first. Rows older than CONFIG.LOG_DAYS_KEPT are deleted. */
+/** Newest first. Rows older than CONFIG.LOG_DAYS_KEPT are deleted (wherever they are). */
 function writeActivity(output, ctx) {
   var sheet = output.getSheetByName('Activity');
   if (ctx.events.length) {
@@ -1108,20 +1218,44 @@ function writeActivity(output, ctx) {
       ];
     });
     sheet.insertRowsAfter(1, rows.length);
-    sheet.getRange(2, 1, rows.length, ACTIVITY_HEADERS.length).setValues(rows);
+    // New rows copy the header's styling; reset it.
+    sheet.getRange(2, 1, rows.length, ACTIVITY_HEADERS.length).setValues(rows)
+      .setFontWeight('normal').setFontColor('#000000').setBackground(null);
     sheet.getRange(2, 1, rows.length, 1).setNumberFormat('ddd MM/dd h:mm am/pm');
   }
   var last = sheet.getLastRow();
   if (last < 2) return;
   var cutoff = ctx.now.getTime() - CONFIG.LOG_DAYS_KEPT * 24 * 60 * 60 * 1000;
   var whens = sheet.getRange(2, 1, last - 1, 1).getValues();
-  for (var i = 0; i < whens.length; i++) {
-    var w = whens[i][0];
-    if (w instanceof Date && w.getTime() < cutoff) {
-      sheet.deleteRows(i + 2, last - (i + 1));
-      break;
-    }
+  // Bottom-up, deleting each run of old rows in one call.
+  var i = whens.length - 1;
+  while (i >= 0) {
+    if (!isOld(whens[i][0], cutoff)) { i--; continue; }
+    var end = i;
+    while (i >= 0 && isOld(whens[i][0], cutoff)) i--;
+    sheet.deleteRows(i + 3, end - i);
   }
+}
+
+function isOld(v, cutoff) {
+  return v instanceof Date && v.getTime() < cutoff;
+}
+
+/**
+ * Huddle and Patient Responsibility numbers, but only when the sheet has
+ * already been rebuilt for today (before ~8 AM, and on days it isn't
+ * rebuilt, yesterday's numbers would be misleading).
+ */
+function liveNumbers(ctx) {
+  var h = ctx.state.huddle || {};
+  var pr = ctx.state.pr || {};
+  var huddleToday = h.date === ctx.today;
+  var prToday = pr.date === ctx.today;
+  return {
+    targets: huddleToday ? h.targets || {} : {},
+    toCollect: prToday ? pr.today || {} : {},
+    yesterday: prToday ? pr.yesterday || {} : {},
+  };
 }
 
 /** Rebuilds the Today tab: one row per PCC clinic. */
@@ -1129,28 +1263,30 @@ function writeToday(output, ctx) {
   var sheet = output.getSheetByName('Today');
   var tz = ctx.tz;
   var day = ctx.state.day;
-  var targets = ctx.state.huddle.targets || {};
-  var pr = ctx.state.pr || {};
+  var live = liveNumbers(ctx);
+  var targets = live.targets;
   var hour = Number(Utilities.formatDate(ctx.now, tz, 'H'));
   var quietHour = CONFIG.QUIET_CHECK_HOUR === null || !watchedSinceMorning(ctx) ? 99 : CONFIG.QUIET_CHECK_HOUR;
 
   var rows = rosterClinics(ctx.roster).map(function (clinic) {
     var c = day.counts[clinic] || {};
     var t = targets[clinic] || {};
-    var today = (pr.today || {})[clinic] || {};
-    var y = (pr.yesterday || {})[clinic] || {};
-    var total = activityTotal(c);
+    var pay = live.toCollect[clinic] || {};
+    var y = live.yesterday[clinic] || {};
     var heads = [];
-    if (!total && hour >= quietHour) heads.push('No activity yet today');
-    if (t.nothingBooked && !c.booked) heads.push(t.nothingBooked + ' on the nothing-booked list, none marked');
+    if (!activityTotal(c) && hour >= quietHour) heads.push('No activity yet today');
+    if (t.nothingBooked && !c.booked && !c.bookedNo) heads.push(t.nothingBooked + ' on the nothing-booked list, none marked');
     return [
       clinic,
       whoLabel(clinicWho(ctx.roster, clinic)),
       c.npsNew || 0, c.npsClaimed || 0, c.ulNew || 0, c.ulScheduled || 0, c.ulNotes || 0, c.ulReasons || 0,
-      blankIfNull(t.nothingBooked), c.booked || 0, blankIfNull(t.newIe),
-      blankIfNull(today.pts !== undefined ? today.pts : t.collectPts),
-      blankIfNull(today.dollars !== undefined ? today.dollars : t.collectDollars),
-      c.collected ? c.collected + (c.collectedDollars ? ' ($' + c.collectedDollars.toFixed(2) + ')' : '') : 0,
+      blankIfNull(t.nothingBooked),
+      (c.booked || 0) + (c.bookedNo ? ' (+' + c.bookedNo + ' not booked)' : ''),
+      blankIfNull(t.newIe),
+      blankIfNull(pay.pts !== undefined ? pay.pts : t.collectPts),
+      blankIfNull(pay.dollars !== undefined ? pay.dollars : t.collectDollars),
+      (c.collected || 0) + (c.collectedDollars ? ' ($' + c.collectedDollars.toFixed(2) + ' in full)' : '') +
+        (c.collectedNo ? ' (+' + c.collectedNo + ' nothing collected)' : ''),
       y.should === null || y.should === undefined ? '' :
         '$' + Number(y.collected || 0).toFixed(2) + ' of $' + Number(y.should).toFixed(2) +
         (y.pct === null || y.pct === undefined ? '' : ' (' + Math.round(y.pct * 100) + '%)'),
@@ -1175,7 +1311,7 @@ function writeToday(output, ctx) {
   var notesRow = TODAY_HEADER_ROW + rows.length + 2;
   sheet.getRange(notesRow, 1, 3, 1).setValues([
     ['NPS counts are credited by the "Taken By" name. UL, Huddle and Collected? marks have no "entered by" column, so they are credited to the clinic\'s PCC (or to the signer of a UL note).'],
-    ['Huddle and to-collect numbers come from Danielle\'s morning rebuilds; "Yesterday collected" is what Prompt recorded.'],
+    ['Huddle and to-collect numbers appear once Danielle\'s morning rebuild for today has run; "Yesterday collected" is what Prompt recorded.'],
     ['Every event, with a link to its row, is on the Activity tab. Edit the Roster tab when PCCs change.'],
   ]).setFontColor('#666666');
 }
@@ -1193,56 +1329,70 @@ function activityTotal(c) {
   return COUNTERS.reduce(function (sum, k) { return sum + (c[k] || 0); }, 0);
 }
 
+function isHeadline(e) {
+  return CONFIG.NOTIFY_ON.indexOf(e.type) !== -1;
+}
+
 // ---------------------------------------------------------------------------
 // Email
 // ---------------------------------------------------------------------------
 
 /**
  * Batches events into one email at most every NOTIFY_EVERY_MINUTES, sent
- * only when something in CONFIG.NOTIFY_ON happened. Plus, on weekdays, one
- * "no activity yet" email at QUIET_CHECK_HOUR and one summary at
- * DAY_SUMMARY_HOUR.
+ * only when something in CONFIG.NOTIFY_ON happened (and always flushed
+ * before the day's summary). Plus, on weekdays, one "no activity yet"
+ * email at QUIET_CHECK_HOUR, one summary at DAY_SUMMARY_HOUR, and one
+ * "can't read a source" email if a problem lasts two checks in a row. A
+ * failed send leaves everything queued for the next run.
  */
 function notify(output, ctx) {
   var st = ctx.state.notify;
   st.pending = st.pending.concat(ctx.events.filter(function (e) { return e.type !== 'info'; }));
+  st.errorRuns = ctx.errors.length ? (st.errorRuns || 0) + 1 : 0;
   if (!CONFIG.NOTIFY) {
     st.pending = [];
     return;
   }
   var url = output.getUrl();
   var tz = ctx.tz;
+  var day = ctx.state.day;
   var hour = Number(Utilities.formatDate(ctx.now, tz, 'H'));
   var weekday = Number(Utilities.formatDate(ctx.now, tz, 'u')) <= 5;
+  var summaryDue = weekday && CONFIG.DAY_SUMMARY_HOUR !== null && hour >= CONFIG.DAY_SUMMARY_HOUR && !day.summarySent;
 
-  var headline = st.pending.some(function (e) { return CONFIG.NOTIFY_ON.indexOf(e.type) !== -1; });
   var due = !st.lastSent || ctx.now.getTime() - st.lastSent >= CONFIG.NOTIFY_EVERY_MINUTES * 60 * 1000;
-  if (headline && due) {
-    sendMail(digestSubject(st.pending), digestBody(st.pending, url, tz));
+  if (st.pending.some(isHeadline) && (due || summaryDue) &&
+      trySend(ctx, digestSubject(st.pending), digestBody(st.pending, url, tz))) {
     st.lastSent = ctx.now.getTime();
     st.pending = [];
   }
 
-  var day = ctx.state.day;
+  if (st.errorRuns >= 2 && day.errorSent !== ctx.errors.join('|') &&
+      trySend(ctx, 'PCC Watch: can\'t read part of its sources',
+        'These have failed for the last ' + st.errorRuns + ' checks, so activity there isn\'t being seen:\n\n' +
+        ctx.errors.map(function (e) { return '  • ' + e; }).join('\n') +
+        '\n\nCheck that the file still exists and is shared with you. Today tab: ' + url)) {
+    day.errorSent = ctx.errors.join('|');
+  }
+
   if (weekday && CONFIG.QUIET_CHECK_HOUR !== null && hour >= CONFIG.QUIET_CHECK_HOUR && !day.quietSent &&
-      watchedSinceMorning(ctx)) {
-    day.quietSent = true;
+      watchedSinceMorning(ctx) && !ctx.errors.length) {
     var quiet = rosterClinics(ctx.roster).filter(function (c) {
       return !activityTotal(day.counts[c] || {});
     });
-    if (quiet.length) {
-      sendMail('PCC Watch: no activity yet from ' + quiet.length + ' clinic' + (quiet.length > 1 ? 's' : ''),
-        'As of ' + Utilities.formatDate(ctx.now, tz, 'h:mm a') + ', nothing new on the NPS, UL, Huddle or Collected? from:\n\n' +
-        quiet.map(function (c) { return '  • ' + c + ' — ' + whoLabel(clinicWho(ctx.roster, c)); }).join('\n') +
-        '\n\nToday by PCC: ' + url);
+    if (!quiet.length || trySend(ctx,
+      'PCC Watch: no activity yet from ' + quiet.length + ' clinic' + (quiet.length > 1 ? 's' : ''),
+      'As of ' + Utilities.formatDate(ctx.now, tz, 'h:mm a') + ', nothing new on the NPS, UL, Huddle or Collected? from:\n\n' +
+      quiet.map(function (c) { return '  • ' + c + ' — ' + whoLabel(clinicWho(ctx.roster, c)); }).join('\n') +
+      '\n\nToday by PCC: ' + url)) {
+      day.quietSent = true;
     }
   }
 
-  if (weekday && CONFIG.DAY_SUMMARY_HOUR !== null && hour >= CONFIG.DAY_SUMMARY_HOUR && !day.summarySent) {
+  if (summaryDue && trySend(ctx, 'PCC Watch: today\'s summary (' + Utilities.formatDate(ctx.now, tz, 'EEE MM/dd') + ')',
+    summaryBody(ctx, url))) {
     day.summarySent = true;
-    sendMail('PCC Watch: today\'s summary (' + Utilities.formatDate(ctx.now, tz, 'EEE MM/dd') + ')',
-      summaryBody(ctx, url));
-    st.pending = [];
+    st.pending = st.pending.filter(isHeadline);
   }
 }
 
@@ -1250,7 +1400,7 @@ function digestSubject(events) {
   var parts = [];
   var seen = {};
   events.forEach(function (e) {
-    if (CONFIG.NOTIFY_ON.indexOf(e.type) === -1) return;
+    if (!isHeadline(e)) return;
     var k = e.pcc + '|' + EVENT_TYPES[e.type].source;
     if (seen[k]) { seen[k].n++; return; }
     seen[k] = { first: firstNames(e.pcc), source: EVENT_TYPES[e.type].source, n: 1 };
@@ -1275,9 +1425,9 @@ function digestBody(events, url, tz) {
     lines.push(k);
     var counted = {};
     byPcc[k].forEach(function (e) {
-      if (CONFIG.NOTIFY_ON.indexOf(e.type) !== -1) {
+      if (isHeadline(e)) {
         lines.push('  • ' + EVENT_TYPES[e.type].label + ' — ' + e.linkLabel + ' (' +
-          Utilities.formatDate(new Date(e.at), tz, 'h:mm a') + ')' + (e.link ? '\n    ' + e.link : ''));
+          Utilities.formatDate(new Date(e.at), tz, 'EEE h:mm a') + ')' + (e.link ? '\n    ' + e.link : ''));
       } else {
         counted[e.type] = (counted[e.type] || 0) + 1;
       }
@@ -1293,7 +1443,7 @@ function digestBody(events, url, tz) {
 
 function summaryBody(ctx, url) {
   var day = ctx.state.day;
-  var targets = ctx.state.huddle.targets || {};
+  var targets = liveNumbers(ctx).targets;
   var lines = ['PCC activity today (' + Utilities.formatDate(ctx.now, ctx.tz, 'EEE MM/dd') + ')', ''];
   rosterClinics(ctx.roster).forEach(function (clinic) {
     var c = day.counts[clinic] || {};
@@ -1304,9 +1454,11 @@ function summaryBody(ctx, url) {
       (c.ulNotes || 0) + ' notes, ' + (c.ulReasons || 0) + ' reasons');
     lines.push('  Huddle: ' + (c.booked || 0) + ' marked booked' +
       (t.nothingBooked ? ' of ' + t.nothingBooked + ' on the list' : '') +
-      ' · Collected? marked: ' + (c.collected || 0));
+      (c.bookedNo ? ', ' + c.bookedNo + ' not booked' : '') +
+      ' · Collected: ' + (c.collected || 0) + (c.collectedNo ? ', ' + c.collectedNo + ' nothing collected' : ''));
     lines.push('');
   });
+  if (ctx.errors.length) lines.push('Not read this run: ' + ctx.errors.join(' | '), '');
   lines.push('Details: ' + url);
   return lines.join('\n');
 }
@@ -1315,34 +1467,44 @@ function firstNames(label) {
   return label.split(' / ').map(function (n) { return n.split(' ')[0]; }).join('/');
 }
 
-function sendMail(subject, body) {
-  var to = CONFIG.NOTIFY_EMAILS.length ? CONFIG.NOTIFY_EMAILS.join(',') : Session.getEffectiveUser().getEmail();
-  MailApp.sendEmail({ to: to, subject: subject, body: body });
+/** Sends to CONFIG.NOTIFY_EMAILS (or you). false + a Today-tab problem if it fails. */
+function trySend(ctx, subject, body) {
+  try {
+    var to = CONFIG.NOTIFY_EMAILS.length ? CONFIG.NOTIFY_EMAILS.join(',') : Session.getEffectiveUser().getEmail();
+    MailApp.sendEmail({ to: to, subject: subject, body: body });
+    return true;
+  } catch (e) {
+    ctx.errors.push('Email: ' + errorText(e));
+    return false;
+  }
 }
 
 // ---------------------------------------------------------------------------
 // Output sheet, roster seed, state
 // ---------------------------------------------------------------------------
 
+/**
+ * The PCC Watch sheet. Created only once (when no ID is stored); after
+ * that, failing to open it retries and then aborts the run, so a passing
+ * Google hiccup never starts a new sheet and loses the Roster.
+ */
 function getOutputSpreadsheet() {
-  if (CONFIG.OUTPUT_SPREADSHEET_ID) return SpreadsheetApp.openById(CONFIG.OUTPUT_SPREADSHEET_ID);
+  if (CONFIG.OUTPUT_SPREADSHEET_ID) {
+    return withRetry(function () { return SpreadsheetApp.openById(CONFIG.OUTPUT_SPREADSHEET_ID); });
+  }
   var props = PropertiesService.getScriptProperties();
   var id = props.getProperty(OUTPUT_ID_PROPERTY);
-  if (id) {
-    try {
-      return SpreadsheetApp.openById(id);
-    } catch (e) {
-      Logger.log('Stored output sheet not reachable (' + e + '); creating a new one.');
-    }
-  }
+  if (id) return withRetry(function () { return SpreadsheetApp.openById(id); });
+
   var ss = SpreadsheetApp.create(CONFIG.OUTPUT_TITLE);
+  ss.getSheets()[0].setName('Today');
   moveToFolder(ss.getId());
   props.setProperty(OUTPUT_ID_PROPERTY, ss.getId());
   Logger.log('Created output spreadsheet: ' + ss.getUrl());
   return ss;
 }
 
-/** Creates the Today / Activity / Roster tabs if they're missing. */
+/** Creates the Today / Activity / Roster tabs if they're missing. Other tabs are left alone. */
 function ensureTabs(output) {
   if (!output.getSheetByName('Today')) output.insertSheet('Today', 0);
   if (!output.getSheetByName('Activity')) {
@@ -1361,12 +1523,6 @@ function ensureTabs(output) {
       .setFontWeight('bold').setBackground('#1f4e79').setFontColor('#ffffff');
     roster.setFrozenRows(1);
   }
-  output.getSheets().forEach(function (s) {
-    var n = s.getName();
-    if (n !== 'Today' && n !== 'Activity' && n !== 'Roster' && s.getLastRow() === 0 && output.getSheets().length > 3) {
-      output.deleteSheet(s);
-    }
-  });
 }
 
 function newState() {
@@ -1377,33 +1533,30 @@ function newState() {
     huddle: { marks: {}, targets: {} },
     pr: { marks: {}, today: {}, yesterday: {} },
     day: { date: '', firstRun: 0, counts: {}, last: {}, seen: {}, quietSent: false, summarySent: false },
-    notify: { lastSent: 0, pending: [] },
+    notify: { lastSent: 0, pending: [], errorRuns: 0 },
   };
 }
 
+/** The state file. Created only once, like the output sheet. */
 function stateFile() {
   var props = PropertiesService.getScriptProperties();
   var id = props.getProperty(STATE_ID_PROPERTY);
-  if (id) {
-    try {
-      return DriveApp.getFileById(id);
-    } catch (e) {
-      Logger.log('State file not reachable (' + e + '); starting fresh.');
-    }
-  }
+  if (id) return withRetry(function () { return DriveApp.getFileById(id); });
+
   var file = DriveApp.createFile(CONFIG.STATE_FILE_TITLE, JSON.stringify(newState()), MimeType.PLAIN_TEXT);
   moveToFolder(file.getId());
   props.setProperty(STATE_ID_PROPERTY, file.getId());
   return file;
 }
 
+/**
+ * Last run's snapshots. A read or parse failure aborts the run (the next
+ * one retries) instead of starting from an empty state, which would
+ * silently re-baseline every source and lose today's counts.
+ */
 function loadState() {
-  var state;
-  try {
-    state = JSON.parse(stateFile().getBlob().getDataAsString());
-  } catch (e) {
-    state = null;
-  }
+  var file = stateFile();
+  var state = JSON.parse(withRetry(function () { return file.getBlob().getDataAsString(); }));
   if (!state || state.v !== STATE_VERSION) state = newState();
   var fresh = newState();
   Object.keys(fresh).forEach(function (k) { if (!state[k]) state[k] = fresh[k]; });
@@ -1411,7 +1564,21 @@ function loadState() {
 }
 
 function saveState(state) {
-  stateFile().setContent(JSON.stringify(state));
+  var file = stateFile();
+  var text = JSON.stringify(state);
+  withRetry(function () { file.setContent(text); });
+}
+
+/** fn(), retried twice (after 2 s and 4 s) when it throws; the last error is rethrown. */
+function withRetry(fn) {
+  for (var attempt = 1; ; attempt++) {
+    try {
+      return fn();
+    } catch (e) {
+      if (attempt >= 3) throw e;
+      Utilities.sleep(2000 * attempt);
+    }
+  }
 }
 
 function moveToFolder(fileId) {
@@ -1503,9 +1670,9 @@ function timeText(v, tz) {
   return String(v || '').replace(/\s+/g, ' ').trim().toUpperCase();
 }
 
-/** Stable string for a cell (dates as yyyy-MM-dd). */
-function cellKey(v) {
-  if (v instanceof Date) return isNaN(v.getTime()) ? '' : isoKey(v, Session.getScriptTimeZone());
+/** Stable string for a cell (dates as yyyy-MM-dd in the sheet's time zone). */
+function cellKey(v, tz) {
+  if (v instanceof Date) return isNaN(v.getTime()) ? '' : isoKey(v, tz);
   return String(v === null || v === undefined ? '' : v).trim().toLowerCase();
 }
 

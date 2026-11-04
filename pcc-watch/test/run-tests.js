@@ -42,7 +42,7 @@ function patient(first, last) {
     phone: '555' + String(1000000 + seq),
     dob: '1970-01-' + String(10 + (seq % 18)).padStart(2, '0'),
   };
-  SENSITIVE.push(p.full, p.lastFirst, p.acct, p.phone, last);
+  SENSITIVE.push(p.full, p.lastFirst, p.acct, p.phone, p.dob, last);
   return p;
 }
 const d = (y, m, day, h, min) => new Date(y, m - 1, day, h || 0, min || 0);
@@ -442,12 +442,12 @@ setCell(gas, w.pr, 'East Windsor', (r) => r[2] === P.rae.acct, 15, 'Yes - Full')
 setCell(gas, w.pr, 'East Windsor', (r) => r[2] === P.tam.acct, 15, 'Card on File');
 run(w, d(2026, 11, 4, 10, 0));
 check('Huddle: Booked? marked on the clinic tab and All PCC Clinics counts once', () => {
-  const booked = activity(w).filter((r) => r[4] === 'Marked "Booked?" on the Huddle');
+  const booked = activity(w).filter((r) => r[4] === 'Marked booked on the Huddle');
   assert.strictEqual(booked.length, 1);
   assert.strictEqual(booked[0][1], "Damian O'Loughlin");
 });
 check('Collected?: same patient marked in Huddle and Patient Responsibility counts once', () => {
-  const col = activity(w).filter((r) => r[4] === 'Marked "Collected?"' && r[2] === 'East Windsor');
+  const col = activity(w).filter((r) => r[4] === 'Marked collected' && r[2] === 'East Windsor');
   assert.strictEqual(col.length, 2, col.map((r) => r[5]).join(' / '));
   assert(col.some((r) => /\$40\.00/.test(r[5])));
   assert(col.some((r) => /tomorrow/.test(r[5])));
@@ -457,8 +457,9 @@ check('Today tab counts the day\'s work per clinic', () => {
   assert.strictEqual(tr['NPS new'], 1);
   assert.strictEqual(tr['UL visits scheduled'], 1);
   assert.strictEqual(tr['UL notes'], 1);
-  assert.strictEqual(todayRow(w, 'Brick')['Marked booked'], 1);
-  assert(/2/.test(String(todayRow(w, 'East Windsor')['Marked collected'])));
+  assert.strictEqual(String(todayRow(w, 'Brick')['Marked booked']), '1');
+  assert(/^2 \(\$40\.00 in full\)/.test(String(todayRow(w, 'East Windsor')['Marked collected'])),
+    todayRow(w, 'East Windsor')['Marked collected']);
 });
 
 // A source that can't be opened is reported and the rest still work.
@@ -535,6 +536,266 @@ check('October NPS drops out of the state after 11/10', () => {
   assert(state.nps['nps-nov']);
 });
 
+console.log('\nReview regressions');
+const REGRESSION_WORLDS = [];
+/** A fresh world, baselined Wednesday 7:05 AM. */
+function freshWorld() {
+  const x = buildWorld();
+  REGRESSION_WORLDS.push(x);
+  run(x, d(2026, 11, 4, 7, 5), true);
+  return x;
+}
+const at = (x, h, m) => { x.gas.now = d(2026, 11, 4, h, m || 0); };
+
+{
+  const x = freshWorld();
+  const outId = x.gas.props.PCC_WATCH_OUTPUT_ID;
+  x.gas.failOpen[outId] = 2;
+  run(x, d(2026, 11, 4, 7, 20));
+  check('a passing failure to open the PCC Watch sheet is retried', () => {
+    assert.strictEqual(x.gas.props.PCC_WATCH_OUTPUT_ID, outId);
+  });
+  x.gas.failOpen[outId] = 5;
+  let threw = false;
+  try { run(x, d(2026, 11, 4, 7, 35)); } catch (e) { threw = true; }
+  x.gas.failOpen[outId] = 0;
+  check('a lasting failure aborts the run; no second PCC Watch sheet, Roster kept', () => {
+    assert(threw);
+    assert.strictEqual(x.gas.props.PCC_WATCH_OUTPUT_ID, outId);
+    const sheets = Object.keys(x.gas.files).filter((id) => x.gas.files[id].name === 'PCC Watch');
+    assert.strictEqual(sheets.length, 1);
+  });
+  at(x, 7, 40);
+  appendNps(x.gas, x.nov, 'TR', { date: d(2026, 11, 4), takenBy: 'Mariela', p: x.P.uma });
+  x.gas.files[x.gas.props.PCC_WATCH_STATE_FILE_ID].content = '{"v":1,"nps":';
+  threw = false;
+  try { run(x, d(2026, 11, 4, 7, 50)); } catch (e) { threw = true; }
+  check('an unreadable state file aborts the run instead of silently re-baselining', () => {
+    assert(threw);
+    assert.strictEqual(activity(x).length, 0);
+  });
+  x.code.resetSnapshots();
+  run(x, d(2026, 11, 4, 8, 5));
+  check('resetSnapshots() recovers: next run re-baselines quietly', () => {
+    assert.strictEqual(activity(x).length, 0);
+    assert(/all sources read OK/.test(output(x).getSheetByName('Today').getRange(2, 1).getValue()));
+  });
+}
+
+{
+  const x = freshWorld();
+  at(x, 8, 50);
+  appendNps(x.gas, x.nov, 'TR', { date: d(2026, 11, 4), takenBy: 'Mariela', p: x.P.uma });
+  x.gas.mailDown = true;
+  run(x, d(2026, 11, 4, 9, 0));
+  run(x, d(2026, 11, 4, 9, 15));
+  check('mail outage: the event is logged once, not again every run', () => {
+    assert.strictEqual(activity(x).filter((r) => r[1] === 'Mariela Ponce').length, 1);
+    assert(/Email:/.test(output(x).getSheetByName('Today').getRange(2, 1).getValue()));
+  });
+  x.gas.mailDown = false;
+  run(x, d(2026, 11, 4, 9, 30));
+  check('mail back: the held email goes out', () => {
+    assert.strictEqual(x.gas.mail.length, 1);
+    assert(/Mariela \+1 NPS/.test(x.gas.mail[0].subject));
+  });
+  output(x).insertSheet('Dashboard');
+  run(x, d(2026, 11, 4, 9, 45));
+  check('a tab you add to the PCC Watch sheet is left alone', () => {
+    assert(output(x).getSheetByName('Dashboard'));
+  });
+}
+
+{
+  const x = freshWorld();
+  const freeBooked = 'no - pt hospitalized call daughter 5551234567';
+  const freeCollected = 'partial acct ' + x.P.rae.acct + ' paid 20';
+  SENSITIVE.push('5551234567', 'call daughter', 'paid 20');
+  at(x, 9, 55);
+  setCell(x.gas, x.hud, 'Brick', (r) => r[2] === x.P.oz.acct && r[0] === 'Brick', 10, freeBooked);
+  setCell(x.gas, x.hud, 'Brick', (r) => r[2] === x.P.pip.acct && r[0] === 'Brick', 10, 'no');
+  setCell(x.gas, x.hud, 'East Windsor', (r) => r[2] === x.P.rae.acct, 14, freeCollected);
+  setCell(x.gas, x.pr, 'Toms River', (r) => r[2] === x.P.sol.acct, 15, 'No');
+  run(x, d(2026, 11, 4, 10, 0));
+  check('Booked? "no ..." is "not booked", never "booked"', () => {
+    const r = todayRow(x, 'Brick');
+    assert.strictEqual(String(r['Marked booked']), '0 (+2 not booked)');
+    assert(!activity(x).some((a) => a[4] === 'Marked booked on the Huddle'));
+  });
+  check('Collected? "No" is "nothing collected" with no dollars; "partial ..." counts without dollars', () => {
+    assert.strictEqual(String(todayRow(x, 'Toms River')['Marked collected']), '0 (+1 nothing collected)');
+    assert.strictEqual(String(todayRow(x, 'East Windsor')['Marked collected']), '1');
+  });
+  check('typed text in Booked? / Collected? is stored and shown only as its class', () => {
+    const details = activity(x).map((a) => a[5]).join(' | ');
+    assert(/Marked "no"/.test(details) && /Marked "partial"/.test(details), details);
+  });
+}
+
+{
+  const x = freshWorld();
+  at(x, 9, 55);
+  // Jerome schedules, sets a reason and signs his note on a Toms River row.
+  setCell(x.gas, x.ulTr, '11.9.26', (r) => r[0] === x.P.jo.lastFirst, 4, 2);
+  setCell(x.gas, x.ulTr, '11.9.26', (r) => r[0] === x.P.jo.lastFirst, 9, 'Chemo until 12/1');
+  setCell(x.gas, x.ulTr, '11.9.26', (r) => r[0] === x.P.jo.lastFirst, 6, '11/4 sched 2x [JEROME]');
+  // Ordinary note text that looks like initials must not be read as a tag.
+  setCell(x.gas, x.ulTr, '11.9.26', (r) => r[0] === x.P.ivy.lastFirst, 6,
+    '11/3 lm [MARI]\n11/4 lm - as discussed w/ MD (as needed) [MARI]');
+  SENSITIVE.push('Chemo until');
+  run(x, d(2026, 11, 4, 10, 0));
+  check('work on a row whose new note is signed [JEROME] is not credited to the PCC', () => {
+    const tr = activity(x).filter((a) => a[2] === 'Toms River' && a[3] === 'UL');
+    assert.strictEqual(tr.length, 1, tr.map((a) => a.join('|')).join('\n'));
+    assert.strictEqual(tr[0][1], 'Mariela Ponce');
+    assert(/Signed note MARI/.test(tr[0][7]), tr[0][7]);
+  });
+  check('"- as discussed" / "(as needed)" are not initials', () => {
+    assert.deepStrictEqual(x.code.signatureTags('lm - as discussed w/ MD (as needed) [MARI]'), ['MARI']);
+  });
+  check('a free-text reason is logged as "Other"', () => {
+    assert.strictEqual(x.code.reasonWord('Chemo until 12/1'), 'Other');
+  });
+}
+
+{
+  const x = freshWorld();
+  at(x, 9, 55);
+  // The same new IE goes onto this week's and next week's Brick tab.
+  ['11.2.26', '11.9.26'].forEach((tab) => {
+    const sheet = x.ulBrick.getSheetByName(tab);
+    const row = findRow(sheet, (r) => r[0] === '' && r[9] === false);
+    ulRow({ name: x.P.mo.full, ie: true, rxEnd: '', pocEnd: '' }).forEach((v, j) => sheet.set(row, j + 1, v));
+  });
+  // Meanwhile a Toms River row with no dates disappears while a new IE (no dates) is added.
+  const trSheet = x.ulTr.getSheetByName('11.9.26');
+  const joRow = findRow(trSheet, (r) => r[0] === x.P.jo.lastFirst);
+  ulRow({ name: x.P.ned.full, ie: true, rxEnd: '', pocEnd: '' }).forEach((v, j) => trSheet.set(joRow, j + 1, v));
+  // And a name typo is fixed on an Ivy row that has dates.
+  const ivyRow = findRow(trSheet, (r) => r[0] === x.P.ivy.lastFirst);
+  trSheet.set(ivyRow, 1, x.P.ivy.lastFirst + 'e');
+  SENSITIVE.push(x.P.ivy.lastFirst + 'e');
+  x.gas.touch('ul-brick');
+  x.gas.touch('ul-tr');
+  run(x, d(2026, 11, 4, 10, 0));
+  check('a new patient added to two week tabs counts once', () => {
+    assert.strictEqual(todayRow(x, 'Brick')['UL patients added'], 1);
+  });
+  check('a new IE is still counted when an undated row vanishes; a dated row\'s typo fix is not', () => {
+    assert.strictEqual(todayRow(x, 'Toms River')['UL patients added'], 1);
+  });
+}
+
+{
+  const x = freshWorld();
+  at(x, 8, 55);
+  const row = appendNps(x.gas, x.nov, 'TR', { date: d(2026, 11, 4), takenBy: 'Mariela', p: x.P.uma });
+  run(x, d(2026, 11, 4, 9, 0));
+  const sheet = x.nov.getSheetByName('TR');
+  const saved = sheet.data[row - 1].slice();
+  sheet.data[row - 1] = [];
+  x.gas.touch('nps-nov');
+  run(x, d(2026, 11, 4, 9, 15));
+  sheet.data[row - 1] = saved;
+  x.gas.touch('nps-nov');
+  run(x, d(2026, 11, 4, 9, 30));
+  check('an NPS row cleared and restored is credited once', () => {
+    assert.strictEqual(todayRow(x, 'Toms River')['NPS new'], 1);
+  });
+}
+
+{
+  const x = freshWorld();
+  x.gas.files['nps-nov'].name = 'November 2026 New Patient Spreadsheet (old)';
+  x.gas.touch('nps-nov');
+  run(x, d(2026, 11, 4, 12, 45));
+  run(x, d(2026, 11, 4, 13, 0));
+  check('a missing NPS for this month is reported, emailed once, and the quiet email is held back', () => {
+    assert(/NPS: no "November 2026/.test(output(x).getSheetByName('Today').getRange(2, 1).getValue()));
+    const mails = x.gas.mail.map((m) => m.subject);
+    assert.strictEqual(mails.filter((m) => /can't read/.test(m)).length, 1, mails.join(' / '));
+    assert(!mails.some((m) => /no activity/.test(m)), mails.join(' / '));
+  });
+  run(x, d(2026, 11, 4, 13, 15));
+  check('the "can\'t read" email is not repeated every run', () => {
+    assert.strictEqual(x.gas.mail.filter((m) => /can't read/.test(m.subject)).length, 1);
+  });
+}
+
+{
+  const x = freshWorld();
+  const act = output(x).getSheetByName('Activity');
+  const old = d(2026, 8, 20, 9);
+  const recent = d(2026, 11, 3, 9);
+  // Someone sorted the tab: an old row sits between recent ones.
+  act.insertRowsAfter(1, 3);
+  act.getRange(2, 1, 3, 8).setValues([
+    [recent, 'A', 'Brick', 'NPS', 'x', '', '', ''],
+    [old, 'B', 'Brick', 'NPS', 'x', '', '', ''],
+    [recent, 'C', 'Brick', 'NPS', 'x', '', '', ''],
+  ]);
+  run(x, d(2026, 11, 4, 9, 0));
+  check('only Activity rows older than 60 days are deleted, wherever they are', () => {
+    const left = activity(x).map((r) => r[1]);
+    assert.deepStrictEqual(left, ['A', 'C']);
+  });
+}
+
+{
+  const x = freshWorld();
+  at(x, 18, 25);
+  appendNps(x.gas, x.nov, 'TR', { date: d(2026, 11, 4), takenBy: 'Mariela', p: x.P.uma });
+  run(x, d(2026, 11, 4, 18, 30));
+  at(x, 18, 40);
+  appendNps(x.gas, x.nov, 'EW', { date: d(2026, 11, 4), takenBy: 'Emily', p: x.P.vic });
+  run(x, d(2026, 11, 4, 18, 45));
+  const sentBy645 = x.gas.mail.filter((m) => /Emily/.test(m.subject)).length;
+  run(x, d(2026, 11, 5, 7, 0));
+  check('a new patient found after the evening\'s last email goes out next morning', () => {
+    assert.strictEqual(sentBy645, 0);
+    assert(x.gas.mail.some((m) => /Emily \+1 NPS/.test(m.subject)));
+  });
+  check('before the morning rebuild, yesterday\'s Huddle targets are not shown as today\'s', () => {
+    assert.strictEqual(todayRow(x, 'Brick')['Huddle: nothing booked'], '');
+  });
+}
+
+{
+  const x = freshWorld();
+  // Thursday: the Huddle is rebuilt at 8:04 and a PCC marks a patient at 8:10,
+  // all before the 8:15 check.
+  x.gas.now = d(2026, 11, 5, 8, 4);
+  x.hud = huddle(x.gas, 'huddle', 'Thu 11/05/2026', {
+    'Brick': { book: [{ p: x.P.pip, mark: 'yes' }], pay: [] },
+  });
+  run(x, d(2026, 11, 5, 8, 15));
+  check('a mark made between the morning rebuild and the next check still counts', () => {
+    assert.strictEqual(String(todayRow(x, 'Brick')['Marked booked']), '1');
+  });
+}
+
+{
+  const x = freshWorld();
+  run(x, d(2026, 11, 16, 9, 0));
+  check('a UL with no tab for the current week is flagged even if the file hasn\'t changed', () => {
+    const status = output(x).getSheetByName('Today').getRange(2, 1).getValue();
+    assert(/UL Somerset: no tab for this week or later/.test(status), status);
+  });
+}
+
+{
+  const x = freshWorld();
+  x.code.installTrigger();
+  x.code.CONFIG.TRIGGER_EVERY_MINUTES = 20;
+  let threw = false;
+  try { x.code.installTrigger(); } catch (e) { threw = /must be one of/.test(e.message); }
+  x.code.CONFIG.TRIGGER_EVERY_MINUTES = 15;
+  check('an invalid interval is refused and the existing trigger is kept', () => {
+    assert(threw);
+    assert.strictEqual(x.gas.triggers.length, 1);
+  });
+}
+
 console.log('\nRoster edits');
 check('a PCC added on the Roster tab is picked up without code changes', () => {
   const roster = output(w).getSheetByName('Roster');
@@ -572,20 +833,25 @@ console.log('\nsetup()');
 }
 
 console.log('\nPrivacy');
-check('no patient name, account #, phone or DOB in state, PCC Watch sheet, emails or logs', () => {
+/** Every place a sensitive fixture string turns up in a world's state, PCC Watch sheet, emails or logs. */
+function findLeaks(world) {
+  const g = world.gas;
   const haystacks = [];
-  Object.keys(gas.files).forEach((id) => {
-    const f = gas.files[id];
-    if (f.kind === 'blob') haystacks.push(['state file', f.content]);
+  Object.keys(g.files).forEach((id) => {
+    if (g.files[id].kind === 'blob') haystacks.push(['state file', g.files[id].content]);
   });
-  output(w).getSheets().forEach((s) => haystacks.push(['sheet ' + s.getName(), JSON.stringify(s.data)]));
-  gas.mail.forEach((m, i) => haystacks.push(['email ' + i, m.subject + '\n' + m.body]));
-  haystacks.push(['logs', gas.logs.join('\n')]);
+  output(world).getSheets().forEach((sh) => haystacks.push(['sheet ' + sh.getName(), JSON.stringify(sh.data)]));
+  g.mail.forEach((m, i) => haystacks.push(['email ' + i, m.subject + '\n' + m.body]));
+  haystacks.push(['logs', g.logs.join('\n')]);
   const leaks = [];
   haystacks.forEach(([where, text]) => {
     const lower = String(text).toLowerCase();
-    SENSITIVE.forEach((s) => { if (lower.indexOf(String(s).toLowerCase()) !== -1) leaks.push(where + ': ' + s); });
+    SENSITIVE.forEach((x) => { if (lower.indexOf(String(x).toLowerCase()) !== -1) leaks.push(where + ': ' + x); });
   });
+  return leaks;
+}
+check('no patient name, account #, phone or DOB in state, PCC Watch sheet, emails or logs', () => {
+  const leaks = findLeaks(w).concat(...REGRESSION_WORLDS.map(findLeaks));
   assert.strictEqual(leaks.length, 0, leaks.slice(0, 5).join('; '));
 });
 check('the HMAC secret is only in Script Properties', () => {
