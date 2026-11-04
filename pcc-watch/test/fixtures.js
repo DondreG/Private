@@ -15,7 +15,7 @@ const CODE = fs.readFileSync(path.join(__dirname, '..', 'Code.gs'), 'utf8');
 const EXPORTS = ['CONFIG', 'setup', 'runWatchAt', 'runWatch', 'resetSnapshots', 'getOutputSpreadsheet',
   'ensureTabs', 'getSecret', 'loadState', 'installTrigger', 'removeTriggers', 'signatureTags',
   'normalizeName', 'attributeTakenBy', 'parseUlTabDate', 'npsMonths', 'mondayOf', 'loadRoster', 'reasonWord',
-  'dashboardData', 'todayModel', 'doGet', 'getDashboardData'];
+  'dashboardData', 'todayModel', 'doGet', 'getDashboardData', 'backfillAt', 'noteLineDate'];
 
 /** Loads Code.gs with the fake services as its globals (same realm, so instanceof Date works). */
 function loadCode(gas) {

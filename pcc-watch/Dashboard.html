@@ -201,6 +201,7 @@
       <button type="button" data-days="1" aria-pressed="true">Today</button>
       <button type="button" data-days="7" aria-pressed="false">7 days</button>
       <button type="button" data-days="30" aria-pressed="false">30 days</button>
+      <button type="button" data-days="60" aria-pressed="false">60 days</button>
     </div>
     <select id="clinicFilter" aria-label="Clinic"><option value="">All clinics</option></select>
     <select id="pccFilter" aria-label="PCC"><option value="">All PCCs</option></select>
@@ -218,6 +219,7 @@
         <h2 id="activityTitle">Activity by hour</h2>
         <div class="legend" id="activityLegend"></div>
         <div class="chart" id="activityChart"></div>
+        <div class="muted" id="activityNote"></div>
       </div>
       <div class="card">
         <h2>New patients by PCC</h2>
@@ -492,10 +494,14 @@
         buckets.push(b);
         byKey[b.key] = b;
       }
+      var undated = 0;
       events.forEach(function (e) {
-        var k = String(Math.min(18, Math.max(7, e.hour)));
-        add(byKey[k], e.source);
+        if (e.hour === null) { undated++; return; }
+        add(byKey[String(Math.min(18, Math.max(7, e.hour)))], e.source);
       });
+      document.getElementById('activityNote').textContent = undated
+        ? undated + ' earlier entr' + (undated === 1 ? 'y' : 'ies') + ' from before PCC Watch started have no time of day, so they’re in the totals and the list but not in this chart.'
+        : '';
     } else {
       title.textContent = 'Activity by day (last ' + view.days + ' days)';
       var p = view.data.today.split('-');
@@ -507,6 +513,7 @@
         buckets.push(bd);
         byKey[iso] = bd;
       }
+      document.getElementById('activityNote').textContent = '';
       events.forEach(function (e) { if (byKey[e.day]) add(byKey[e.day], e.source); });
     }
     function add(b, src) { if (b) b.values[src] = (b.values[src] || 0) + 1; }
@@ -786,7 +793,8 @@
     }
     rows.slice(0, FEED_LIMIT).forEach(function (e) {
       var tr = el('tr');
-      tr.appendChild(el('td', 'when', view.days === 1 ? e.time : dayLabel(e.day, true) + ' · ' + e.time));
+      var when = view.days === 1 ? (e.time || 'Earlier today') : dayLabel(e.day, true) + (e.time ? ' · ' + e.time : '');
+      tr.appendChild(el('td', 'when', when));
       var src = el('td', 'src');
       var key = el('span', 'key');
       key.style.background = sourceColor(e.source);

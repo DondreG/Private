@@ -149,11 +149,44 @@ the log.
      and Tiago (`TC`) sign UL notes.
 
    Changes take effect on the next check.
+8. Pick **`backfill`** in the function dropdown → **Run**. It fills the dashboard
+   with history from the first day of last month, so last month's and this
+   month's NPS are both covered (see below). It takes a minute or two.
+
+### Backfill: history from before the watcher started
+
+The watcher only sees changes from the moment it starts. `backfill` adds what
+the sheets can date from before then:
+
+- **NPS.** Every patient a PCC entered, in both last month's and this month's
+  NPS. Each is dated by its call date (no time of day) and credited by "Taken
+  By", with its clinic, IE date and status.
+- **UL.** Care-note lines that start with a date, such as `11/3 lm [MARI]`,
+  credited to the signer, or to the clinic's PCC when unsigned.
+
+UL scheduling changes and Huddle / Collected? marks carry no date, so they
+only count from when the watcher started.
+
+Backfilled rows show up on the dashboard and in the Activity tab. Their
+"Backfilled" column reads `date` (date only) or `time` (exact time). You can
+run `backfill` again at any time: it replaces what it added before, and it
+never double-counts anything the watcher saw live. To start from a different
+date, set `BACKFILL_FROM` (for example `'2026-09-15'`).
+
+### Updating to a new version
+
+1. Paste the new `Code.gs` and `Dashboard.html` over the old ones and save.
+2. Go to **Deploy → Manage deployments**, click the pencil icon, set
+   **Version: New version**, then **Deploy**. The dashboard link stays the
+   same. (Scheduled checks pick up the new code as soon as it's saved; the
+   dashboard only does after this step.)
+3. If the release notes say so, run `backfill` again.
 
 Other functions you can run from the dropdown:
 
 | Function | What it does |
 | --- | --- |
+| `backfill` | Add history from before the watcher started (see above). Safe to re-run. |
 | `runNow` | Run a check now, even outside the schedule. |
 | `removeTriggers` | Stop the watcher. Keeps the sheet. |
 | `installTrigger` | Start it again, or apply a new `TRIGGER_EVERY_MINUTES`. |

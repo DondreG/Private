@@ -157,6 +157,10 @@ var CONFIG = {
 
   // Activity rows older than this are deleted.
   LOG_DAYS_KEPT: 60,
+
+  // backfill() adds history from this date (yyyy-MM-dd). '' = the first
+  // day of last month, so last month's and this month's NPS are covered.
+  BACKFILL_FROM: '',
 };
 
 var SECRET_PROPERTY = 'PCC_WATCH_SECRET';
@@ -202,8 +206,10 @@ var VALID_TRIGGER_MINUTES = [1, 5, 10, 15, 30];
 // The last four columns feed the dashboard: event type, the clinic the
 // patient is for (an NPS entry can be typed in another clinic's tab), the
 // IE date when known, and the raw row link.
+// "Backfilled" is "date" for history added by backfill() with only a date
+// known, "time" when the time of day is known too, blank for live events.
 var ACTIVITY_HEADERS = ['When', 'PCC', 'Clinic', 'Source', 'What', 'Detail', 'Row', 'How we know',
-  'Type', 'Patient clinic', 'IE date', 'Link'];
+  'Type', 'Patient clinic', 'IE date', 'Link', 'Backfilled'];
 var ROSTER_HEADERS = ['PCC', 'Clinic', 'NPS "Taken By" names', 'UL note tags', 'Active (Y/N)'];
 var TODAY_HEADERS = [
   'Clinic', 'PCC', 'NPS new', 'NPS leads claimed', 'UL patients added', 'UL visits scheduled',
@@ -416,7 +422,9 @@ function watchNps(ctx) {
       var tz = ss.getSpreadsheetTimeZone();
       // `credited`: rows already credited to a PCC this month, so clearing
       // and restoring a row (or a duplicate shifting) never credits it twice.
-      var cur = { updated: updated, tabs: {}, credited: (prev && prev.credited) || {} };
+      var cur = {
+        updated: updated, tabs: {}, credited: (prev && prev.credited) || {}, backfilled: (prev && prev.backfilled) || {},
+      };
       ss.getSheets().forEach(function (sheet) {
         var name = sheet.getName();
         if (!CONFIG.NPS_CLINIC_TABS[name]) return;
@@ -445,8 +453,9 @@ function npsMonths(now) {
 }
 
 /**
- * Snapshot of one NPS clinic tab: { rows: { key: { r, t, a, ie, st } } }, or
- * null if the tab isn't a clinic tab. key = HMAC(patient name + call date)
+ * Snapshot of one NPS clinic tab: { rows: { key: { r, t, a, ie, st } }, mem },
+ * or null if the tab isn't a clinic tab. `mem` (call date and, for web-form
+ * rows, time; for backfill()) is never saved. key = HMAC(patient name + call date)
  * with an occurrence suffix for exact duplicates; r = sheet row; t =
  * normalized "Taken By"; a = 1 when the call date carries a time of day
  * (rows the web form writes, as opposed to typed rows); ie = FS/IE Date as
@@ -464,8 +473,9 @@ function readNpsTab(sheet, tz, secret) {
   if (!h) return null;
 
   var rows = {};
+  var mem = {};
   var firstRow = h.row + 2;
-  if (last < firstRow) return { rows: rows };
+  if (last < firstRow) return { rows: rows, mem: mem };
   var readWidth = 0;
   Object.keys(h.cols).forEach(function (k) {
     if (h.cols[k] !== null) readWidth = Math.max(readWidth, h.cols[k] + 1);
@@ -476,8 +486,10 @@ function readNpsTab(sheet, tz, secret) {
     var name = normalizeName(row[h.cols.patient]);
     if (!name) return;
     var dateCell = row[h.cols.date];
-    var day = toIsoKey(dateCell, tz) || String(dateCell).trim().toLowerCase();
+    var iso = toIsoKey(dateCell, tz);
+    var day = iso || String(dateCell).trim().toLowerCase();
     var key = occurrenceKey(occ, hmac(secret, 'nps|' + name + '|' + day));
+    mem[key] = { day: iso || '', at: isTimestamped(dateCell, tz) ? dateCell.getTime() : null };
     rows[key] = {
       r: firstRow + i,
       t: normalizeTakenBy(row[h.cols.takenBy]),
@@ -486,7 +498,7 @@ function readNpsTab(sheet, tz, secret) {
       st: h.cols.status === null ? '' : statusWord(row[h.cols.status]),
     };
   });
-  return { rows: rows };
+  return { rows: rows, mem: mem };
 }
 
 /**
@@ -1223,7 +1235,8 @@ function whoLabel(who) {
 
 function addEvent(ctx, e) {
   ctx.events.push({
-    at: ctx.now.getTime(),
+    at: e.at || ctx.now.getTime(),
+    backfilled: e.backfilled || '',
     type: e.type,
     pcc: whoLabel(e.who),
     clinic: e.who.clinic,
@@ -1253,13 +1266,7 @@ function countEvents(ctx) {
 function writeActivity(output, ctx) {
   var sheet = output.getSheetByName('Activity');
   if (ctx.events.length) {
-    var rows = ctx.events.slice().reverse().map(function (e) {
-      return [
-        new Date(e.at), e.pcc, e.clinic, EVENT_TYPES[e.type].source, EVENT_TYPES[e.type].label,
-        e.detail, e.link ? '=HYPERLINK("' + e.link + '","' + e.linkLabel.replace(/"/g, '') + '")' : '', e.how,
-        e.type, e.forClinic, e.ie, e.link,
-      ];
-    });
+    var rows = ctx.events.slice().reverse().map(activityRow);
     sheet.insertRowsAfter(1, rows.length);
     // New rows copy the header's styling; reset it.
     sheet.getRange(2, 1, rows.length, ACTIVITY_HEADERS.length).setValues(rows)
@@ -1278,6 +1285,14 @@ function writeActivity(output, ctx) {
     while (i >= 0 && isOld(whens[i][0], cutoff)) i--;
     sheet.deleteRows(i + 3, end - i);
   }
+}
+
+function activityRow(e) {
+  return [
+    new Date(e.at), e.pcc, e.clinic, EVENT_TYPES[e.type].source, EVENT_TYPES[e.type].label,
+    e.detail, e.link ? '=HYPERLINK("' + e.link + '","' + e.linkLabel.replace(/"/g, '') + '")' : '', e.how,
+    e.type, e.forClinic, e.ie, e.link, e.backfilled || '',
+  ];
 }
 
 function isOld(v, cutoff) {
@@ -1311,7 +1326,7 @@ function todayModel(ctx) {
   var hour = Number(Utilities.formatDate(ctx.now, ctx.tz, 'H'));
   var quietHour = CONFIG.QUIET_CHECK_HOUR === null || !watchedSinceMorning(ctx) ? 99 : CONFIG.QUIET_CHECK_HOUR;
   return rosterClinics(ctx.roster).map(function (clinic) {
-    var c = day.counts[clinic] || {};
+    var c = dayCounts(ctx, clinic);
     var t = live.targets[clinic] || {};
     var pay = live.toCollect[clinic] || {};
     var y = live.yesterday[clinic] || {};
@@ -1394,6 +1409,21 @@ function watchedSinceMorning(ctx) {
   return !!first && Number(Utilities.formatDate(new Date(first), ctx.tz, 'H')) < CONFIG.RUN_FROM_HOUR + 3;
 }
 
+/**
+ * Today's counters for a clinic: live events plus any of today's history
+ * added by backfill() (work done before the watcher started).
+ */
+function dayCounts(ctx, clinic) {
+  var day = ctx.state.day && ctx.state.day.date === ctx.today ? ctx.state.day : { counts: {} };
+  var live = day.counts[clinic] || {};
+  var bf = ctx.state.backfill && ctx.state.backfill.date === ctx.today ? (ctx.state.backfill.counts || {})[clinic] || {} : {};
+  var out = {};
+  COUNTERS.concat(['collectedDollars']).forEach(function (k) {
+    if (live[k] || bf[k]) out[k] = (live[k] || 0) + (bf[k] || 0);
+  });
+  return out;
+}
+
 function activityTotal(c) {
   return COUNTERS.reduce(function (sum, k) { return sum + (c[k] || 0); }, 0);
 }
@@ -1447,7 +1477,7 @@ function notify(output, ctx) {
   if (weekday && CONFIG.QUIET_CHECK_HOUR !== null && hour >= CONFIG.QUIET_CHECK_HOUR && !day.quietSent &&
       watchedSinceMorning(ctx) && !ctx.errors.length) {
     var quiet = rosterClinics(ctx.roster).filter(function (c) {
-      return !activityTotal(day.counts[c] || {});
+      return !activityTotal(dayCounts(ctx, c));
     });
     if (!quiet.length || trySend(ctx,
       'PCC Watch: no activity yet from ' + quiet.length + ' clinic' + (quiet.length > 1 ? 's' : ''),
@@ -1515,7 +1545,7 @@ function summaryBody(ctx, url) {
   var targets = liveNumbers(ctx).targets;
   var lines = ['PCC activity today (' + Utilities.formatDate(ctx.now, ctx.tz, 'EEE MM/dd') + ')', ''];
   rosterClinics(ctx.roster).forEach(function (clinic) {
-    var c = day.counts[clinic] || {};
+    var c = dayCounts(ctx, clinic);
     var t = targets[clinic] || {};
     lines.push(clinic + ' — ' + whoLabel(clinicWho(ctx.roster, clinic)));
     lines.push('  NPS: ' + (c.npsNew || 0) + ' new, ' + (c.npsClaimed || 0) + ' leads claimed');
@@ -1546,6 +1576,223 @@ function trySend(ctx, subject, body) {
     ctx.errors.push('Email: ' + errorText(e));
     return false;
   }
+}
+
+// ---------------------------------------------------------------------------
+// Backfill: history from before the watcher started
+// ---------------------------------------------------------------------------
+
+/**
+ * Run once after setup (safe to run again: it replaces what it added
+ * before). Adds the history the sheets can date, from CONFIG.BACKFILL_FROM
+ * (default: the first day of last month) up to when the watcher started:
+ *   - NPS: every row a PCC entered ("Taken By"), dated by its call date,
+ *     with its clinic and IE date — both last month's and this month's NPS.
+ *   - UL: care-note lines that start with a date ("11/3 lm [MARI]"), credited
+ *     to the signer, or to the clinic's PCC when unsigned.
+ * UL scheduling changes and Huddle / Collected? marks carry no date, so they
+ * only count from when the watcher started. Rows already credited live are
+ * skipped, so nothing is counted twice.
+ */
+function backfill() {
+  backfillAt(new Date());
+}
+
+function backfillAt(now) {
+  var lock = LockService.getScriptLock();
+  if (!lock.tryLock(5 * 60 * 1000)) throw new Error('A check is running; try backfill again in a minute.');
+  try {
+    var tz = Session.getScriptTimeZone();
+    var output = getOutputSpreadsheet();
+    ensureTabs(output);
+    var ctx = {
+      now: now, tz: tz, today: isoKey(now, tz), secret: getSecret(), roster: loadRoster(output),
+      state: loadState(), events: [], errors: [],
+    };
+    var startedDay = isoKey(new Date(installedAt()), tz);
+    var from = CONFIG.BACKFILL_FROM || isoKey(new Date(now.getFullYear(), now.getMonth() - 1, 1), tz);
+
+    guarded(ctx, 'NPS', function () { backfillNps(ctx, from); });
+    backfillUl(ctx, from, startedDay);
+    if (ctx.errors.length) Logger.log('Some sources were skipped: ' + ctx.errors.join(' | '));
+
+    replaceBackfilledRows(output, ctx);
+    var counts = {};
+    ctx.events.forEach(function (e) {
+      if (isoKey(new Date(e.at), tz) !== ctx.today) return;
+      var c = counts[e.clinic] = counts[e.clinic] || {};
+      var counter = EVENT_TYPES[e.type].counter;
+      c[counter] = (c[counter] || 0) + 1;
+    });
+    ctx.state.backfill = { at: now.getTime(), from: from, date: ctx.today, counts: counts, events: ctx.events.length };
+    try {
+      writeToday(output, ctx);
+    } catch (e) {
+      Logger.log('Today tab not updated: ' + errorText(e));
+    }
+    saveState(ctx.state);
+    Logger.log('Backfilled ' + ctx.events.length + ' events from ' + from + '.');
+    return ctx.events.length;
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+/** NPS rows a PCC entered between `from` and today, in every monthly NPS that range touches. */
+function backfillNps(ctx, from) {
+  monthsBetween(parseIsoDate(from), parseIsoDate(ctx.today)).forEach(function (month) {
+    var label = MONTH_NAMES[month.getMonth()] + ' ' + month.getFullYear();
+    var file = findNpsFile(MONTH_NAMES[month.getMonth()], String(month.getFullYear()));
+    if (!file) {
+      ctx.errors.push('NPS: no "' + label + ' New Patient Spreadsheet" visible');
+      return;
+    }
+    var ss = SpreadsheetApp.openById(file.getId());
+    var tz = ss.getSpreadsheetTimeZone();
+    var st = ctx.state.nps[file.getId()];
+    if (st) {
+      st.credited = st.credited || {};
+      st.backfilled = st.backfilled || {};
+    }
+    ss.getSheets().forEach(function (sheet) {
+      var name = sheet.getName();
+      var tabClinic = CONFIG.NPS_CLINIC_TABS[name];
+      if (!tabClinic) return;
+      var tab = readNpsTab(sheet, tz, ctx.secret);
+      if (!tab) return;
+      Object.keys(tab.rows).forEach(function (k) {
+        var row = tab.rows[k];
+        var mem = tab.mem[k];
+        if (!mem.day || mem.day < from || mem.day > ctx.today) return;
+        var who = attributeTakenBy(ctx.roster, row.t);
+        if (!who) return;
+        var base = name + '|' + k.split('#')[0];
+        if (st && st.credited[base] && !st.backfilled[base]) return;
+        if (st) {
+          st.credited[base] = 1;
+          st.backfilled[base] = 1;
+        }
+        var at = mem.at || parseIsoDate(mem.day).getTime() + 12 * 60 * 60 * 1000;
+        addEvent(ctx, {
+          type: row.a ? 'claimed_lead' : 'new_entry', who: who, forClinic: tabClinic, ie: row.ie, at: at,
+          backfilled: mem.at ? 'time' : 'date',
+          detail: 'For ' + tabClinic + ' · ' + (row.ie ? 'IE ' + shortDate(row.ie) : 'no IE date') +
+            (row.st ? ' · ' + row.st : '') + ' · call ' + shortDate(mem.day),
+          link: rowLink(ss, sheet, row.r), linkLabel: name + ' row ' + row.r,
+        });
+      });
+    });
+  });
+}
+
+/**
+ * UL care-note lines dated from `from` up to the day before the watcher
+ * started (from then on, live events count them), across the week tabs that
+ * range touches. A line carried into several week tabs counts once.
+ */
+function backfillUl(ctx, from, startedDay) {
+  var earliest = addDays(parseIsoDate(from), -6);
+  var latest = addDays(mondayOf(ctx.now, ctx.tz), 7 * CONFIG.UL_WEEKS_AHEAD);
+  Object.keys(CONFIG.UL_FILES).forEach(function (clinic) {
+    guarded(ctx, 'UL ' + clinic, function () {
+      var ss = SpreadsheetApp.openById(CONFIG.UL_FILES[clinic]);
+      var tz = ss.getSpreadsheetTimeZone();
+      var seen = {};
+      ss.getSheets().forEach(function (sheet) {
+        var name = sheet.getName();
+        var week = parseUlTabDate(name);
+        if (!week || week < earliest || week > latest) return;
+        var tab = readUlTab(sheet, ctx.secret, tz);
+        if (!tab) return;
+        Object.keys(tab.rows).forEach(function (k) {
+          (tab.lines[k] || []).forEach(function (l) {
+            var day = noteLineDate(l.text, ctx.today);
+            if (!day || day < from || day >= startedDay) return;
+            var once = k.split('#')[0] + '|' + l.h;
+            if (seen[once]) return;
+            seen[once] = 1;
+            var lines = [l.text];
+            lines.tag = knownTag(signatureTags(l.text));
+            var who = attributeUlLines(ctx.roster, clinic, lines);
+            if (!who) return;
+            addEvent(ctx, {
+              type: 'note', who: who, at: parseIsoDate(day).getTime() + 12 * 60 * 60 * 1000, backfilled: 'date',
+              detail: 'Week of ' + name + ' · note dated ' + shortDate(day) + (lines.tag ? ' · signed ' + lines.tag : ''),
+              link: rowLink(ss, sheet, tab.rows[k].r), linkLabel: clinic + ' UL ' + name + ' row ' + tab.rows[k].r,
+            });
+          });
+        });
+      });
+    });
+  });
+}
+
+/**
+ * The date a note line starts with ("11/3 lm", "10/28/26 ..."), as
+ * yyyy-MM-dd, or ''. Without a year it's the latest such date not after
+ * today.
+ */
+function noteLineDate(text, todayIso) {
+  var m = String(text || '').match(/^\s*(\d{1,2})\/(\d{1,2})(?:\/(\d{2}|\d{4}))?(?!\d)/);
+  if (!m) return '';
+  var month = Number(m[1]);
+  var day = Number(m[2]);
+  var year = m[3] ? (m[3].length === 2 ? 2000 + Number(m[3]) : Number(m[3])) : Number(todayIso.substring(0, 4));
+  var d = new Date(year, month - 1, day);
+  if (d.getMonth() !== month - 1 || d.getDate() !== day) return '';
+  var iso = isoKey(d, Session.getScriptTimeZone());
+  if (!m[3] && iso > todayIso) iso = isoKey(new Date(year - 1, month - 1, day), Session.getScriptTimeZone());
+  return iso;
+}
+
+/** Removes rows an earlier backfill() added, adds this one's, and re-sorts newest first. */
+function replaceBackfilledRows(output, ctx) {
+  var sheet = output.getSheetByName('Activity');
+  var col = ACTIVITY_HEADERS.indexOf('Backfilled') + 1;
+  var last = sheet.getLastRow();
+  if (last >= 2) {
+    var flags = sheet.getRange(2, col, last - 1, 1).getValues();
+    var i = flags.length - 1;
+    while (i >= 0) {
+      if (!flags[i][0]) { i--; continue; }
+      var end = i;
+      while (i >= 0 && flags[i][0]) i--;
+      sheet.deleteRows(i + 3, end - i);
+    }
+  }
+  if (ctx.events.length) {
+    var rows = ctx.events.map(activityRow);
+    sheet.insertRowsAfter(1, rows.length);
+    sheet.getRange(2, 1, rows.length, ACTIVITY_HEADERS.length).setValues(rows)
+      .setFontWeight('normal').setFontColor('#000000').setBackground(null);
+  }
+  last = sheet.getLastRow();
+  if (last < 2) return;
+  var body = sheet.getRange(2, 1, last - 1, ACTIVITY_HEADERS.length);
+  body.sort({ column: 1, ascending: false });
+  sheet.getRange(2, 1, last - 1, 1).setNumberFormat('ddd MM/dd h:mm am/pm');
+  var dateOnly = [];
+  sheet.getRange(2, col, last - 1, 1).getValues().forEach(function (r, j) {
+    if (r[0] === 'date') dateOnly.push('A' + (j + 2));
+  });
+  if (dateOnly.length) sheet.getRangeList(dateOnly).setNumberFormat('ddd MM/dd');
+}
+
+/** When the watcher started: the state file's creation time. */
+function installedAt() {
+  var id = PropertiesService.getScriptProperties().getProperty(STATE_ID_PROPERTY);
+  return id ? DriveApp.getFileById(id).getDateCreated().getTime() : Date.now();
+}
+
+/** First of each month from `from`'s month through `to`'s month. */
+function monthsBetween(from, to) {
+  var months = [];
+  var m = new Date(from.getFullYear(), from.getMonth(), 1);
+  while (m <= to) {
+    months.push(m);
+    m = new Date(m.getFullYear(), m.getMonth() + 1, 1);
+  }
+  return months;
 }
 
 // ---------------------------------------------------------------------------
@@ -1595,11 +1842,13 @@ function dashboardData(now, days) {
       var type = String(r[8] || '');
       if (!EVENT_TYPES[type] || type === 'info') return;
       var link = String(r[11] || '');
+      var dateOnly = String(r[12] || '') === 'date';
       events.push({
         at: when.getTime(),
         day: isoKey(when, tz),
-        hour: Number(Utilities.formatDate(when, tz, 'H')),
-        time: Utilities.formatDate(when, tz, 'h:mm a'),
+        hour: dateOnly ? null : Number(Utilities.formatDate(when, tz, 'H')),
+        time: dateOnly ? '' : Utilities.formatDate(when, tz, 'h:mm a'),
+        backfilled: !!r[12],
         type: type,
         source: EVENT_TYPES[type].source,
         what: EVENT_TYPES[type].label,
@@ -1628,6 +1877,8 @@ function dashboardData(now, days) {
       errors: state.lastRun.errors || [],
     } : null,
     everyMinutes: CONFIG.TRIGGER_EVERY_MINUTES,
+    maxDays: CONFIG.LOG_DAYS_KEPT,
+    backfill: state.backfill ? { from: state.backfill.from, events: state.backfill.events } : null,
     sheetUrl: output.getUrl(),
     clinics: todayModel(ctx),
     pccs: pccs,
@@ -1672,11 +1923,14 @@ function getOutputSpreadsheet() {
 /** Creates the Today / Activity / Roster tabs if they're missing. Other tabs are left alone. */
 function ensureTabs(output) {
   if (!output.getSheetByName('Today')) output.insertSheet('Today', 0);
-  if (!output.getSheetByName('Activity')) {
-    var act = output.insertSheet('Activity', 1);
-    act.getRange(1, 1, 1, ACTIVITY_HEADERS.length).setValues([ACTIVITY_HEADERS])
-      .setFontWeight('bold').setBackground('#1f4e79').setFontColor('#ffffff');
+  var act = output.getSheetByName('Activity');
+  if (!act) {
+    act = output.insertSheet('Activity', 1);
     act.setFrozenRows(1);
+  }
+  var header = act.getRange(1, 1, 1, ACTIVITY_HEADERS.length);
+  if (header.getValues()[0].join('|') !== ACTIVITY_HEADERS.join('|')) {
+    header.setValues([ACTIVITY_HEADERS]).setFontWeight('bold').setBackground('#1f4e79').setFontColor('#ffffff');
   }
   if (!output.getSheetByName('Roster')) {
     var roster = output.insertSheet('Roster', 2);

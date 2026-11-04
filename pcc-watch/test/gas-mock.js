@@ -44,6 +44,19 @@ function createGas(opts) {
       return this;
     }
     setValue(v) { this.sheet.set(this.row, this.col, v); this.sheet.touch(); return this; }
+    sort(spec) {
+      const col = (typeof spec === 'number' ? spec : spec.column) - this.col;
+      const asc = typeof spec === 'number' ? true : spec.ascending !== false;
+      const key = (v) => (v instanceof Date ? v.getTime() : v);
+      const rows = this.getValues();
+      rows.sort((a, b) => {
+        const x = key(a[col]);
+        const y = key(b[col]);
+        return (x < y ? -1 : x > y ? 1 : 0) * (asc ? 1 : -1);
+      });
+      this.setValues(rows);
+      return this;
+    }
   }
   ['setFontWeight', 'setFontSize', 'setFontColor', 'setBackground', 'setWrap', 'setNumberFormat',
     'setVerticalAlignment'].forEach((m) => { FakeRange.prototype[m] = function () { return this; }; });
@@ -85,6 +98,9 @@ function createGas(opts) {
       if (numRows !== undefined && numRows < 1) throw new Error('getRange: numRows must be >= 1, got ' + numRows);
       if (numCols !== undefined && numCols < 1) throw new Error('getRange: numCols must be >= 1, got ' + numCols);
       return new FakeRange(this, row, col, numRows || 1, numCols || 1);
+    }
+    getRangeList(a1s) {
+      return { setNumberFormat: () => ({ a1s }) };
     }
     getDataRange() {
       return new FakeRange(this, 1, 1, Math.max(1, this.getLastRow()), Math.max(1, this.getLastColumn()));
@@ -137,6 +153,7 @@ function createGas(opts) {
       getId: () => id,
       getName: () => f.name,
       getLastUpdated: () => new Date(f.updated),
+      getDateCreated: () => new Date(f.created || f.updated),
       getBlob: () => ({ getDataAsString: () => f.content }),
       setContent: (s) => { f.content = s; f.updated = gas.clock(); },
       moveTo: () => {},
@@ -155,7 +172,7 @@ function createGas(opts) {
     },
     createFile: (name, content) => {
       const id = 'blob' + idSeq++;
-      files[id] = { kind: 'blob', name, content, updated: gas.clock() };
+      files[id] = { kind: 'blob', name, content, updated: gas.clock(), created: gas.clock() };
       return fakeFile(id);
     },
     getFolderById: () => ({}),

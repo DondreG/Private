@@ -666,6 +666,74 @@ console.log('\nDashboard');
   });
 }
 
+console.log('\nBackfill (October + November)');
+{
+  const x = buildWorld();
+  REGRESSION_WORLDS.push(x);
+  const c = x.code;
+  check('note dates: leading m/d only, latest not after today', () => {
+    assert.strictEqual(c.noteLineDate('11/3 lm [MARI]', '2026-11-04'), '2026-11-03');
+    assert.strictEqual(c.noteLineDate('12/30 called', '2026-11-04'), '2025-12-30');
+    assert.strictEqual(c.noteLineDate('10/28/26 sched', '2026-11-04'), '2026-10-28');
+    assert.strictEqual(c.noteLineDate('IE 11/10', '2026-11-04'), '');
+    assert.strictEqual(c.noteLineDate('13/1 x', '2026-11-04'), '');
+    assert.strictEqual(c.noteLineDate('11/31 x', '2026-11-04'), '');
+  });
+  // Emily entered a patient this morning, before the watcher was installed.
+  x.gas.now = d(2026, 11, 4, 10, 0);
+  appendNps(x.gas, x.nov, 'EW', { date: d(2026, 11, 4), takenBy: 'Emily', p: x.P.wren });
+  run(x, d(2026, 11, 4, 15, 0), true);
+  x.gas.now = d(2026, 11, 4, 15, 20);
+  appendNps(x.gas, x.nov, 'TR', { date: d(2026, 11, 4), takenBy: 'Mariela', p: x.P.uma });
+  run(x, d(2026, 11, 4, 15, 30));
+  const liveRows = activity(x).length;
+  x.gas.now = d(2026, 11, 4, 15, 40);
+  const added = c.backfillAt(d(2026, 11, 4, 15, 40));
+  const rows = activity(x);
+  const bf = rows.filter((r) => r[12]);
+  check('backfill covers October and November NPS entries by PCC', () => {
+    const who = bf.filter((r) => r[3] === 'NPS').map((r) => r[1] + ' ' + r[5].split(' · call ')[1]).sort();
+    assert.deepStrictEqual(who, ["Damian O'Loughlin Mon 11/2", 'Emily Freire Wed 11/4', 'Mariela Ponce Fri 10/30',
+      'Mariela Ponce Tue 11/3']);
+    assert(!bf.some((r) => /Lana|Pia/.test(r[1])));
+  });
+  check('backfill adds dated UL note lines (signed [MARI]); undated notes are skipped', () => {
+    const notes = bf.filter((r) => r[3] === 'UL');
+    assert.strictEqual(notes.length, 1, notes.map((r) => r.join('|')).join('\n'));
+    assert.strictEqual(notes[0][1], 'Mariela Ponce');
+    assert(/note dated Tue 11\/3 · signed MARI/.test(notes[0][5]), notes[0][5]);
+  });
+  check('live events are kept and not duplicated; the log is newest first', () => {
+    assert.strictEqual(added, 5);
+    assert.strictEqual(rows.length, liveRows + 5);
+    assert.strictEqual(rows.filter((r) => r[1] === 'Mariela Ponce' && r[3] === 'NPS' && !r[12]).length, 1);
+    const times = rows.map((r) => r[0].getTime());
+    assert.deepStrictEqual(times, times.slice().sort((a, b) => b - a));
+  });
+  check('today\'s pre-install entry counts on today\'s card; the live one isn\'t counted twice', () => {
+    const data = c.dashboardData(d(2026, 11, 4, 15, 45), 1);
+    assert.strictEqual(data.clinics.find((k) => k.clinic === 'East Windsor').counts.npsNew, 1);
+    assert.strictEqual(data.clinics.find((k) => k.clinic === 'Toms River').counts.npsNew, 1);
+  });
+  check('the dashboard shows backfilled history with dates but no time of day', () => {
+    const data = c.dashboardData(d(2026, 11, 4, 15, 45), 60);
+    const oct = data.events.find((e) => e.day === '2026-10-30');
+    assert(oct && oct.backfilled && oct.hour === null && oct.time === '', JSON.stringify(oct));
+    assert.strictEqual(data.backfill.from, '2026-10-01');
+  });
+  c.backfillAt(d(2026, 11, 4, 15, 50));
+  check('running backfill again replaces its rows instead of adding more', () => {
+    assert.strictEqual(activity(x).length, liveRows + 5);
+  });
+  x.gas.now = d(2026, 11, 4, 16, 5);
+  setCell(x.gas, x.nov, 'EW', (r) => r[3] === x.P.wren.full, 10, d(2026, 11, 11));
+  run(x, d(2026, 11, 4, 16, 15));
+  check('a backfilled entry that later gets an IE date fires "IE booked"', () => {
+    const e = activity(x).find((r) => r[8] === 'ie_booked');
+    assert(e && e[1] === 'Emily Freire', e && e.join('|'));
+  });
+}
+
 console.log('\nPrivacy');
 /** Every place a sensitive fixture string turns up in a world's state, PCC Watch sheet, emails or logs. */
 function findLeaks(world) {
