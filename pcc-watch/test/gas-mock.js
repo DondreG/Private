@@ -199,7 +199,10 @@ function createGas(opts) {
     const p = parts(date, tz);
     const H = Number(p.hour);
     const h12 = H % 12 === 0 ? 12 : H % 12;
-    return fmt.replace(/yyyy|MM|dd|EEE|HH|hh|mm|ss|H|h|a|M|d|u/g, (t) => ({
+    const long = new Intl.DateTimeFormat('en-US', { timeZone: tz, weekday: 'long', month: 'long' }).formatToParts(date);
+    const longPart = (type) => long.find((x) => x.type === type).value;
+    return fmt.replace(/yyyy|MMMM|MM|dd|EEEE|EEE|HH|hh|mm|ss|H|h|a|M|d|u/g, (t) => ({
+      MMMM: longPart('month'), EEEE: longPart('weekday'),
       yyyy: p.year, MM: p.month, dd: p.day, EEE: p.weekday, HH: p.hour, hh: String(h12).padStart(2, '0'),
       mm: p.minute, ss: p.second, H: String(H), h: String(h12), a: H < 12 ? 'AM' : 'PM',
       M: String(Number(p.month)), d: String(Number(p.day)), u: String(DOW[p.weekday]),
@@ -255,6 +258,7 @@ function createGas(opts) {
         },
       },
       ScriptApp: {
+        getService: () => ({ getUrl: () => gas.webAppUrl || null }),
         getProjectTriggers: () => triggers.slice(),
         deleteTrigger: (t) => { triggers = triggers.filter((x) => x !== t); },
         newTrigger: (fn) => {
@@ -262,6 +266,14 @@ function createGas(opts) {
           const chain = { timeBased: () => chain, everyMinutes: (n) => { t.every = n; return chain; },
             create: () => { triggers.push(t); return t; } };
           return chain;
+        },
+      },
+      HtmlService: {
+        createHtmlOutputFromFile: (name) => {
+          const out = { file: name, title: '', meta: {} };
+          out.setTitle = (t) => { out.title = t; return out; };
+          out.addMetaTag = (k, v) => { out.meta[k] = v; return out; };
+          return out;
         },
       },
       Logger: { log: (m) => logs.push(String(m)) },

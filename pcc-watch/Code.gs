@@ -171,6 +171,7 @@ var MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June', 'July
 var EVENT_TYPES = {
   new_entry: { source: 'NPS', label: 'New patient on the NPS', counter: 'npsNew' },
   claimed_lead: { source: 'NPS', label: 'Claimed a web / AI lead on the NPS', counter: 'npsClaimed' },
+  ie_booked: { source: 'NPS', label: 'Booked the IE for an NPS patient', counter: 'npsIe' },
   new_patient: { source: 'UL', label: 'Added a patient to the UL', counter: 'ulNew' },
   scheduled: { source: 'UL', label: 'Scheduled visits on the UL', counter: 'ulScheduled' },
   note: { source: 'UL', label: 'Added a UL care note', counter: 'ulNotes' },
@@ -181,20 +182,28 @@ var EVENT_TYPES = {
   not_collected: { source: 'Collections', label: 'Marked nothing collected', counter: 'collectedNo' },
   info: { source: 'Watcher', label: 'Note', counter: null },
 };
-var COUNTERS = ['npsNew', 'npsClaimed', 'ulNew', 'ulScheduled', 'ulNotes', 'ulReasons', 'booked', 'bookedNo',
+var COUNTERS = ['npsNew', 'npsClaimed', 'npsIe', 'ulNew', 'ulScheduled', 'ulNotes', 'ulReasons', 'booked', 'bookedNo',
   'collected', 'collectedNo'];
 
 // "Booked?" and "Collected?" are free text in places, so only these classes
 // are ever stored or shown — never what someone typed.
 var COLLECTED_CLASSES = ['yes - full', 'partial', 'card on file', '$0 owed', 'no'];
 var COLLECTED_COUNTS_AS_COLLECTED = ['yes - full', 'partial', 'card on file'];
+// Collected? classes as the dropdown spells them.
+var COLLECTED_LABELS = {
+  'yes - full': 'Yes - Full', 'partial': 'Partial', 'card on file': 'Card on File', '$0 owed': '$0 Owed', 'no': 'No',
+};
 
 // REASON NOT SCHEDULED dropdown values. Anything else is logged as "Other".
 var UL_REASONS = ['See MD', 'MD Hold', 'Hospitalized', 'Transportation', 'Work', 'Away', 'Sick', 'Auth'];
 
 var VALID_TRIGGER_MINUTES = [1, 5, 10, 15, 30];
 
-var ACTIVITY_HEADERS = ['When', 'PCC', 'Clinic', 'Source', 'What', 'Detail', 'Row', 'How we know'];
+// The last four columns feed the dashboard: event type, the clinic the
+// patient is for (an NPS entry can be typed in another clinic's tab), the
+// IE date when known, and the raw row link.
+var ACTIVITY_HEADERS = ['When', 'PCC', 'Clinic', 'Source', 'What', 'Detail', 'Row', 'How we know',
+  'Type', 'Patient clinic', 'IE date', 'Link'];
 var ROSTER_HEADERS = ['PCC', 'Clinic', 'NPS "Taken By" names', 'UL note tags', 'Active (Y/N)'];
 var TODAY_HEADERS = [
   'Clinic', 'PCC', 'NPS new', 'NPS leads claimed', 'UL patients added', 'UL visits scheduled',
@@ -219,7 +228,8 @@ function setup() {
   ensureTabs(output);
   installTrigger();
   runWatchAt(new Date(), { force: true });
-  Logger.log('PCC Watch is running. Open: ' + output.getUrl());
+  Logger.log('PCC Watch is running. Data sheet: ' + output.getUrl());
+  Logger.log('For the dashboard: Deploy > New deployment > Web app (Execute as: Me, Who has access: Only myself).');
 }
 
 /** Trigger handler. Does nothing outside CONFIG.RUN_DAYS / RUN_FROM_HOUR–RUN_TO_HOUR. */
@@ -326,6 +336,7 @@ function runWatchAt(now, opts) {
     } catch (e) {
       Logger.log('Today tab not updated: ' + errorText(e));
     }
+    ctx.state.lastRun = { at: now.getTime(), errors: ctx.errors };
     saveState(ctx.state);
   } finally {
     lock.releaseLock();
@@ -434,12 +445,12 @@ function npsMonths(now) {
 }
 
 /**
- * Snapshot of one NPS clinic tab: { rows: { key: { r, t, a } } }, or null if
- * the tab isn't a clinic tab. key = HMAC(patient name + call date) with an
- * occurrence suffix for exact duplicates; r = sheet row; t = normalized
- * "Taken By"; a = 1 when the call date carries a time of day (rows the web
- * form writes, as opposed to typed rows). Only Date, Taken By and Patient
- * Name are read.
+ * Snapshot of one NPS clinic tab: { rows: { key: { r, t, a, ie, st } } }, or
+ * null if the tab isn't a clinic tab. key = HMAC(patient name + call date)
+ * with an occurrence suffix for exact duplicates; r = sheet row; t =
+ * normalized "Taken By"; a = 1 when the call date carries a time of day
+ * (rows the web form writes, as opposed to typed rows); ie = FS/IE Date as
+ * yyyy-MM-dd ('' if none); st = Status (Active / Pending / Inactive, or '').
  */
 function readNpsTab(sheet, tz, secret) {
   var last = sheet.getLastRow();
@@ -447,13 +458,18 @@ function readNpsTab(sheet, tz, secret) {
   var width = Math.min(sheet.getLastColumn(), 26);
   if (width < 1) return null;
   var head = sheet.getRange(1, 1, Math.min(last, CONFIG.HEADER_SEARCH_ROWS), width).getValues();
-  var h = findHeaderRow(head, { date: 'date', takenBy: 'taken by', patient: 'patient name' });
+  var h = findHeaderRow(head, {
+    date: 'date', takenBy: 'taken by', patient: 'patient name', ie: 'fs/ie date', status: 'status',
+  });
   if (!h) return null;
 
   var rows = {};
   var firstRow = h.row + 2;
   if (last < firstRow) return { rows: rows };
-  var readWidth = Math.max(h.cols.date, h.cols.takenBy, h.cols.patient) + 1;
+  var readWidth = 0;
+  Object.keys(h.cols).forEach(function (k) {
+    if (h.cols[k] !== null) readWidth = Math.max(readWidth, h.cols[k] + 1);
+  });
   var values = sheet.getRange(firstRow, 1, last - firstRow + 1, readWidth).getValues();
   var occ = {};
   values.forEach(function (row, i) {
@@ -462,7 +478,13 @@ function readNpsTab(sheet, tz, secret) {
     var dateCell = row[h.cols.date];
     var day = toIsoKey(dateCell, tz) || String(dateCell).trim().toLowerCase();
     var key = occurrenceKey(occ, hmac(secret, 'nps|' + name + '|' + day));
-    rows[key] = { r: firstRow + i, t: normalizeTakenBy(row[h.cols.takenBy]), a: isTimestamped(dateCell, tz) ? 1 : 0 };
+    rows[key] = {
+      r: firstRow + i,
+      t: normalizeTakenBy(row[h.cols.takenBy]),
+      a: isTimestamped(dateCell, tz) ? 1 : 0,
+      ie: h.cols.ie === null ? '' : toIsoKey(row[h.cols.ie], tz) || '',
+      st: h.cols.status === null ? '' : statusWord(row[h.cols.status]),
+    };
   });
   return { rows: rows };
 }
@@ -490,6 +512,20 @@ function diffNpsTab(ctx, before, now, ss, sheet, credited) {
     var cur = now[k];
     var was = before[k];
     var type = null;
+    var base = tabName + '|' + k.split('#')[0];
+    var where = { link: rowLink(ss, sheet, cur.r), linkLabel: tabName + ' row ' + cur.r };
+    // The IE date filled in later on a row a PCC was credited for.
+    if (was && credited[base] && cur.ie && !was.ie && cur.t === was.t) {
+      var owner = attributeTakenBy(ctx.roster, cur.t);
+      if (owner) {
+        owner.how = 'Taken By (row owner)';
+        addEvent(ctx, {
+          type: 'ie_booked', who: owner, forClinic: tabClinic, ie: cur.ie, link: where.link, linkLabel: where.linkLabel,
+          detail: 'IE ' + shortDate(cur.ie) + (cur.st ? ' · ' + cur.st : ''),
+        });
+      }
+      return;
+    }
     if (!was) {
       var gone = removedAtRow[cur.r];
       if (gone && gone.t === cur.t) return;
@@ -507,15 +543,17 @@ function diffNpsTab(ctx, before, now, ss, sheet, credited) {
     var who = attributeTakenBy(ctx.roster, cur.t);
     if (!who) return;
     if (type === 'claimed_lead' && attributeTakenBy(ctx.roster, was ? was.t : '')) return;
-    var base = tabName + '|' + k.split('#')[0];
     if (credited[base]) return;
     credited[base] = 1;
     addEvent(ctx, {
       type: type,
       who: who,
-      detail: tabClinic + ' tab',
-      link: rowLink(ss, sheet, cur.r),
-      linkLabel: tabName + ' row ' + cur.r,
+      forClinic: tabClinic,
+      ie: cur.ie,
+      detail: 'For ' + tabClinic + ' · ' + (cur.ie ? 'IE ' + shortDate(cur.ie) : 'no IE date yet') +
+        (cur.st ? ' · ' + cur.st : ''),
+      link: where.link,
+      linkLabel: where.linkLabel,
     });
   });
 }
@@ -1046,9 +1084,11 @@ function diffMarks(ctx, before, now) {
     var dayKey = key.replace(/\|t$/, '');
     if (ctx.state.day.seen[dayKey]) return;
     ctx.state.day.seen[dayKey] = 1;
-    var said = cur.m === 'other' ? 'Marked with other text' : 'Marked "' + cur.m + '"';
+    var isBooked = key.indexOf('b|') === 0;
+    var said = cur.m === 'other' ? 'Marked with other text'
+      : 'Marked "' + (isBooked ? cur.m : COLLECTED_LABELS[cur.m]) + '"';
     var e = { who: clinicWho(ctx.roster, cur.clinic), link: cur.link, linkLabel: cur.linkLabel };
-    if (key.indexOf('b|') === 0) {
+    if (isBooked) {
       e.type = cur.m === 'yes' ? 'booked' : 'not_booked';
       e.detail = said;
     } else {
@@ -1187,6 +1227,8 @@ function addEvent(ctx, e) {
     type: e.type,
     pcc: whoLabel(e.who),
     clinic: e.who.clinic,
+    forClinic: e.forClinic || e.who.clinic,
+    ie: e.ie || '',
     how: e.who.how,
     detail: e.detail || '',
     link: e.link || '',
@@ -1215,6 +1257,7 @@ function writeActivity(output, ctx) {
       return [
         new Date(e.at), e.pcc, e.clinic, EVENT_TYPES[e.type].source, EVENT_TYPES[e.type].label,
         e.detail, e.link ? '=HYPERLINK("' + e.link + '","' + e.linkLabel.replace(/"/g, '') + '")' : '', e.how,
+        e.type, e.forClinic, e.ie, e.link,
       ];
     });
     sheet.insertRowsAfter(1, rows.length);
@@ -1258,40 +1301,66 @@ function liveNumbers(ctx) {
   };
 }
 
-/** Rebuilds the Today tab: one row per PCC clinic. */
-function writeToday(output, ctx) {
-  var sheet = output.getSheetByName('Today');
-  var tz = ctx.tz;
-  var day = ctx.state.day;
+/**
+ * Today's numbers per PCC clinic, shared by the Today tab and the
+ * dashboard. Counts are empty until the first check of the day.
+ */
+function todayModel(ctx) {
+  var day = ctx.state.day && ctx.state.day.date === ctx.today ? ctx.state.day : { counts: {}, last: {} };
   var live = liveNumbers(ctx);
-  var targets = live.targets;
-  var hour = Number(Utilities.formatDate(ctx.now, tz, 'H'));
+  var hour = Number(Utilities.formatDate(ctx.now, ctx.tz, 'H'));
   var quietHour = CONFIG.QUIET_CHECK_HOUR === null || !watchedSinceMorning(ctx) ? 99 : CONFIG.QUIET_CHECK_HOUR;
-
-  var rows = rosterClinics(ctx.roster).map(function (clinic) {
+  return rosterClinics(ctx.roster).map(function (clinic) {
     var c = day.counts[clinic] || {};
-    var t = targets[clinic] || {};
+    var t = live.targets[clinic] || {};
     var pay = live.toCollect[clinic] || {};
     var y = live.yesterday[clinic] || {};
     var heads = [];
     if (!activityTotal(c) && hour >= quietHour) heads.push('No activity yet today');
     if (t.nothingBooked && !c.booked && !c.bookedNo) heads.push(t.nothingBooked + ' on the nothing-booked list, none marked');
+    var counts = {};
+    COUNTERS.forEach(function (k) { counts[k] = c[k] || 0; });
+    counts.collectedDollars = c.collectedDollars || 0;
+    return {
+      clinic: clinic,
+      pcc: whoLabel(clinicWho(ctx.roster, clinic)),
+      counts: counts,
+      nothingBooked: blankToNull(t.nothingBooked),
+      nothingBookedLabel: live.targets._label || '',
+      newIe: blankToNull(t.newIe),
+      collectPts: blankToNull(pay.pts !== undefined ? pay.pts : t.collectPts),
+      collectDollars: blankToNull(pay.dollars !== undefined ? pay.dollars : t.collectDollars),
+      yesterday: y.should === null || y.should === undefined ? null :
+        { label: y.label || '', should: y.should, collected: y.collected || 0, pct: blankToNull(y.pct) },
+      last: day.last[clinic] || null,
+      heads: heads,
+    };
+  });
+}
+
+/** Rebuilds the Today tab: one row per PCC clinic. */
+function writeToday(output, ctx) {
+  var sheet = output.getSheetByName('Today');
+  var tz = ctx.tz;
+  var model = todayModel(ctx);
+  var rows = model.map(function (m) {
+    var c = m.counts;
+    var y = m.yesterday;
     return [
-      clinic,
-      whoLabel(clinicWho(ctx.roster, clinic)),
-      c.npsNew || 0, c.npsClaimed || 0, c.ulNew || 0, c.ulScheduled || 0, c.ulNotes || 0, c.ulReasons || 0,
-      blankIfNull(t.nothingBooked),
-      (c.booked || 0) + (c.bookedNo ? ' (+' + c.bookedNo + ' not booked)' : ''),
-      blankIfNull(t.newIe),
-      blankIfNull(pay.pts !== undefined ? pay.pts : t.collectPts),
-      blankIfNull(pay.dollars !== undefined ? pay.dollars : t.collectDollars),
-      (c.collected || 0) + (c.collectedDollars ? ' ($' + c.collectedDollars.toFixed(2) + ' in full)' : '') +
+      m.clinic,
+      m.pcc,
+      c.npsNew, c.npsClaimed, c.ulNew, c.ulScheduled, c.ulNotes, c.ulReasons,
+      blankIfNull(m.nothingBooked),
+      c.booked + (c.bookedNo ? ' (+' + c.bookedNo + ' not booked)' : ''),
+      blankIfNull(m.newIe),
+      blankIfNull(m.collectPts),
+      blankIfNull(m.collectDollars),
+      c.collected + (c.collectedDollars ? ' ($' + c.collectedDollars.toFixed(2) + ' in full)' : '') +
         (c.collectedNo ? ' (+' + c.collectedNo + ' nothing collected)' : ''),
-      y.should === null || y.should === undefined ? '' :
-        '$' + Number(y.collected || 0).toFixed(2) + ' of $' + Number(y.should).toFixed(2) +
-        (y.pct === null || y.pct === undefined ? '' : ' (' + Math.round(y.pct * 100) + '%)'),
-      day.last[clinic] ? Utilities.formatDate(new Date(day.last[clinic]), tz, 'h:mm a') : '',
-      heads.join('; '),
+      !y ? '' : '$' + Number(y.collected).toFixed(2) + ' of $' + Number(y.should).toFixed(2) +
+        (y.pct === null ? '' : ' (' + Math.round(y.pct * 100) + '%)'),
+      m.last ? Utilities.formatDate(new Date(m.last), tz, 'h:mm a') : '',
+      m.heads.join('; '),
     ];
   });
 
@@ -1303,7 +1372,7 @@ function writeToday(output, ctx) {
     (ctx.errors.length ? 'PROBLEMS: ' + ctx.errors.join(' | ') : 'all sources read OK');
   sheet.getRange(2, 1).setValue(status).setFontColor(ctx.errors.length ? '#c00000' : '#666666');
   var headers = TODAY_HEADERS.slice();
-  if (targets._label) headers[8] = 'Huddle: ' + targets._label;
+  if (model.length && model[0].nothingBookedLabel) headers[8] = 'Huddle: ' + model[0].nothingBookedLabel;
   sheet.getRange(TODAY_HEADER_ROW, 1, 1, headers.length).setValues([headers])
     .setFontWeight('bold').setBackground('#1f4e79').setFontColor('#ffffff').setWrap(true);
   if (rows.length) sheet.getRange(TODAY_HEADER_ROW + 1, 1, rows.length, headers.length).setValues(rows);
@@ -1312,7 +1381,7 @@ function writeToday(output, ctx) {
   sheet.getRange(notesRow, 1, 3, 1).setValues([
     ['NPS counts are credited by the "Taken By" name. UL, Huddle and Collected? marks have no "entered by" column, so they are credited to the clinic\'s PCC (or to the signer of a UL note).'],
     ['Huddle and to-collect numbers appear once Danielle\'s morning rebuild for today has run; "Yesterday collected" is what Prompt recorded.'],
-    ['Every event, with a link to its row, is on the Activity tab. Edit the Roster tab when PCCs change.'],
+    ['Every event, with a link to its row, is on the Activity tab. The dashboard shows all of this live. Edit the Roster tab when PCCs change.'],
   ]).setFontColor('#666666');
 }
 
@@ -1353,7 +1422,7 @@ function notify(output, ctx) {
     st.pending = [];
     return;
   }
-  var url = output.getUrl();
+  var url = dashboardUrl() || output.getUrl();
   var tz = ctx.tz;
   var day = ctx.state.day;
   var hour = Number(Utilities.formatDate(ctx.now, tz, 'H'));
@@ -1480,6 +1549,102 @@ function trySend(ctx, subject, body) {
 }
 
 // ---------------------------------------------------------------------------
+// Dashboard (web app)
+// ---------------------------------------------------------------------------
+
+/**
+ * The dashboard page. Deploy once: Deploy > New deployment > Web app,
+ * Execute as "Me", Who has access "Only myself" (or your domain).
+ */
+function doGet() {
+  return HtmlService.createHtmlOutputFromFile('Dashboard')
+    .setTitle('PCC Watch')
+    .addMetaTag('viewport', 'width=device-width, initial-scale=1');
+}
+
+/** Called by the dashboard page: everything it shows for the last `days` days (1 = today). */
+function getDashboardData(days) {
+  return dashboardData(new Date(), days);
+}
+
+/**
+ * { today, days, now, lastRun, everyMinutes, sheetUrl, clinics, pccs,
+ * events }. Events come from the Activity tab (newest first) and carry
+ * only what the Activity tab shows: who, which clinic, what, when, and a
+ * link to the row. Nothing here can identify a patient.
+ */
+function dashboardData(now, days) {
+  days = Math.max(1, Math.min(Math.round(Number(days) || 1), CONFIG.LOG_DAYS_KEPT));
+  var tz = Session.getScriptTimeZone();
+  var output = getOutputSpreadsheet();
+  ensureTabs(output);
+  var roster = loadRoster(output);
+  var state = loadState();
+  var today = isoKey(now, tz);
+  var ctx = { now: now, tz: tz, today: today, roster: roster, state: state };
+  var from = addDays(parseIsoDate(today), -(days - 1)).getTime();
+
+  var events = [];
+  var sheet = output.getSheetByName('Activity');
+  var last = sheet.getLastRow();
+  if (last >= 2) {
+    var values = sheet.getRange(2, 1, last - 1, ACTIVITY_HEADERS.length).getValues();
+    values.forEach(function (r) {
+      var when = r[0];
+      if (!(when instanceof Date) || when.getTime() < from) return;
+      var type = String(r[8] || '');
+      if (!EVENT_TYPES[type] || type === 'info') return;
+      var link = String(r[11] || '');
+      events.push({
+        at: when.getTime(),
+        day: isoKey(when, tz),
+        hour: Number(Utilities.formatDate(when, tz, 'H')),
+        time: Utilities.formatDate(when, tz, 'h:mm a'),
+        type: type,
+        source: EVENT_TYPES[type].source,
+        what: EVENT_TYPES[type].label,
+        pcc: String(r[1] || ''),
+        clinic: String(r[2] || ''),
+        forClinic: String(r[9] || r[2] || ''),
+        detail: String(r[5] || ''),
+        how: String(r[7] || ''),
+        ie: r[10] instanceof Date ? isoKey(r[10], tz) : String(r[10] || ''),
+        link: /^https:\/\/docs\.google\.com\//.test(link) ? link : '',
+      });
+    });
+  }
+  events.sort(function (a, b) { return b.at - a.at; });
+
+  var pccs = [];
+  roster.forEach(function (p) { if (p.pcc && pccs.indexOf(p.pcc) === -1) pccs.push(p.pcc); });
+  return {
+    today: today,
+    todayLabel: Utilities.formatDate(now, tz, 'EEEE, MMMM d'),
+    days: days,
+    now: now.getTime(),
+    lastRun: state.lastRun && state.lastRun.at ? {
+      at: state.lastRun.at,
+      time: Utilities.formatDate(new Date(state.lastRun.at), tz, 'EEE h:mm a'),
+      errors: state.lastRun.errors || [],
+    } : null,
+    everyMinutes: CONFIG.TRIGGER_EVERY_MINUTES,
+    sheetUrl: output.getUrl(),
+    clinics: todayModel(ctx),
+    pccs: pccs,
+    events: events,
+  };
+}
+
+/** The deployed dashboard's URL, or '' if it hasn't been deployed. */
+function dashboardUrl() {
+  try {
+    return ScriptApp.getService().getUrl() || '';
+  } catch (e) {
+    return '';
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Output sheet, roster seed, state
 // ---------------------------------------------------------------------------
 
@@ -1534,6 +1699,7 @@ function newState() {
     pr: { marks: {}, today: {}, yesterday: {} },
     day: { date: '', firstRun: 0, counts: {}, last: {}, seen: {}, quietSent: false, summarySent: false },
     notify: { lastSent: 0, pending: [], errorRuns: 0 },
+    lastRun: { at: 0, errors: [] },
   };
 }
 
@@ -1649,6 +1815,17 @@ function normalizeName(v) {
   return s.replace(/[^a-z0-9' \-]/g, '').replace(/\s+/g, ' ').trim();
 }
 
+/** NPS Status -> "Active" / "Pending" / "Inactive", '' otherwise. */
+function statusWord(v) {
+  var s = lc(v);
+  return s === 'active' ? 'Active' : s === 'pending' ? 'Pending' : s === 'inactive' ? 'Inactive' : '';
+}
+
+/** "2026-11-10" -> "Tue 11/10". */
+function shortDate(iso) {
+  return Utilities.formatDate(parseIsoDate(iso), Session.getScriptTimeZone(), 'EEE M/d');
+}
+
 /** "Mariela / Lana " -> "mariela/lana" */
 function normalizeTakenBy(v) {
   return String(v || '').toLowerCase().replace(/\s+/g, ' ').replace(/\s*\/\s*/g, '/').trim();
@@ -1694,6 +1871,10 @@ function toNumber(v) {
   if (typeof v === 'number') return v;
   var n = Number(String(v).replace(/[$,%\s]/g, ''));
   return isNaN(n) ? null : n;
+}
+
+function blankToNull(v) {
+  return v === '' || v === undefined ? null : v;
 }
 
 function blankIfNull(v) {

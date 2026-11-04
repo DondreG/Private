@@ -1,0 +1,889 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<base target="_top">
+<title>PCC Watch</title>
+<style>
+  :root {
+    color-scheme: light;
+    --page: #f9f9f7;
+    --surface: #fcfcfb;
+    --card: #ffffff;
+    --ink: #0b0b0b;
+    --ink-2: #52514e;
+    --muted: #898781;
+    --grid: #e1e0d9;
+    --axis: #c3c2b7;
+    --border: rgba(11, 11, 11, 0.10);
+    --hover: rgba(11, 11, 11, 0.04);
+    --s-nps: #2a78d6;
+    --s-ul: #eb6834;
+    --s-huddle: #1baf7a;
+    --s-col: #eda100;
+    --meter-fill: #2a78d6;
+    --meter-track: #cde2fb;
+    --good: #0ca30c;
+    --good-text: #006300;
+    --warning: #fab219;
+    --critical: #d03b3b;
+    --link: #1c5cab;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:where(:not([data-theme="light"])) {
+      color-scheme: dark;
+      --page: #0d0d0d;
+      --surface: #1a1a19;
+      --card: #1a1a19;
+      --ink: #f0efec;
+      --ink-2: #c3c2b7;
+      --muted: #898781;
+      --grid: #2c2c2a;
+      --axis: #383835;
+      --border: rgba(255, 255, 255, 0.10);
+      --hover: rgba(255, 255, 255, 0.05);
+      --s-nps: #3987e5;
+      --s-ul: #d95926;
+      --s-huddle: #199e70;
+      --s-col: #c98500;
+      --meter-fill: #3987e5;
+      --meter-track: #184f95;
+      --good-text: #0ca30c;
+      --link: #86b6ef;
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --page: #0d0d0d;
+    --surface: #1a1a19;
+    --card: #1a1a19;
+    --ink: #f0efec;
+    --ink-2: #c3c2b7;
+    --muted: #898781;
+    --grid: #2c2c2a;
+    --axis: #383835;
+    --border: rgba(255, 255, 255, 0.10);
+    --hover: rgba(255, 255, 255, 0.05);
+    --s-nps: #3987e5;
+    --s-ul: #d95926;
+    --s-huddle: #199e70;
+    --s-col: #c98500;
+    --meter-fill: #3987e5;
+    --meter-track: #184f95;
+    --good-text: #0ca30c;
+    --link: #86b6ef;
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; }
+  body {
+    background: var(--page);
+    color: var(--ink);
+    font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  .wrap { max-width: 1240px; margin: 0 auto; padding: 20px 16px 40px; }
+  h1 { font-size: 22px; margin: 0; font-weight: 650; letter-spacing: -0.01em; }
+  h2 { font-size: 15px; margin: 0 0 4px; font-weight: 600; }
+  .sub { color: var(--ink-2); }
+  .muted { color: var(--muted); font-size: 12px; }
+
+  header { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: flex-end; justify-content: space-between; margin-bottom: 16px; }
+  .status { display: inline-flex; gap: 8px; align-items: center; padding: 6px 10px; border-radius: 8px; background: var(--card); border: 1px solid var(--border); max-width: 100%; }
+  .status-icon { width: 18px; height: 18px; border-radius: 50%; display: inline-grid; place-items: center; color: #fff; font-size: 12px; font-weight: 700; flex: none; }
+  .status.ok .status-icon { background: var(--good); }
+  .status.warn .status-icon { background: var(--warning); color: #0b0b0b; }
+  .status.bad .status-icon { background: var(--critical); }
+  .status-text { overflow-wrap: anywhere; }
+
+  .filters { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 16px; }
+  .seg { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; background: var(--card); }
+  .seg button { border: 0; background: transparent; color: var(--ink-2); padding: 7px 12px; font: inherit; cursor: pointer; }
+  .seg button + button { border-left: 1px solid var(--border); }
+  .seg button[aria-pressed="true"] { background: var(--ink); color: var(--card); font-weight: 600; }
+  .seg button:not([aria-pressed="true"]):hover { background: var(--hover); }
+  select, .btn { font: inherit; color: var(--ink); background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 7px 10px; }
+  .btn { cursor: pointer; }
+  .btn:hover { background: var(--hover); }
+
+  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; margin-bottom: 16px; }
+  .tile { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px; }
+  .tile .label { color: var(--ink-2); font-size: 13px; display: flex; gap: 6px; align-items: center; }
+  .tile .value { font-size: 28px; font-weight: 600; margin-top: 2px; }
+  .tile .note { color: var(--muted); font-size: 12px; min-height: 16px; }
+  .key { width: 10px; height: 10px; border-radius: 2px; display: inline-block; flex: none; }
+
+  .grid2 { display: grid; grid-template-columns: 3fr 2fr; gap: 12px; margin-bottom: 16px; }
+  @media (max-width: 860px) { .grid2 { grid-template-columns: 1fr; } }
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px; min-width: 0; }
+  .legend { display: flex; flex-wrap: wrap; gap: 4px 14px; margin: 6px 0 8px; color: var(--ink-2); font-size: 12px; }
+  .legend span { display: inline-flex; gap: 6px; align-items: center; }
+  .chart { width: 100%; }
+  .chart svg { display: block; width: 100%; height: auto; overflow: visible; }
+  .chart text { fill: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+  .chart .name { fill: var(--ink-2); font-size: 12px; font-variant-numeric: normal; }
+  .chart .val { fill: var(--ink-2); }
+  .hit { fill: transparent; cursor: default; }
+  .hit:hover, .hit:focus { fill: var(--hover); outline: none; }
+
+  .section-head { display: flex; flex-wrap: wrap; gap: 8px; align-items: baseline; justify-content: space-between; margin: 4px 0 8px; }
+  .clinics { display: grid; grid-template-columns: repeat(auto-fill, minmax(270px, 1fr)); gap: 12px; margin-bottom: 16px; }
+  .clinic h3 { margin: 0; font-size: 15px; }
+  .clinic .who { color: var(--ink-2); font-size: 13px; }
+  .clinic .top { display: flex; justify-content: space-between; gap: 8px; align-items: flex-start; }
+  .badge { display: inline-flex; gap: 6px; align-items: center; font-size: 12px; color: var(--ink-2); white-space: nowrap; }
+  .badge .ico { width: 16px; height: 16px; border-radius: 50%; display: inline-grid; place-items: center; font-size: 11px; font-weight: 700; }
+  .badge.warn .ico { background: var(--warning); color: #0b0b0b; }
+  .badge.good .ico { background: var(--good); color: #fff; }
+  .counts { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; margin: 10px 0; }
+  .counts div { text-align: left; }
+  .counts b { display: block; font-size: 18px; font-weight: 600; }
+  .counts span { color: var(--muted); font-size: 11px; line-height: 1.2; display: block; }
+  .meter { margin-top: 8px; }
+  .meter .row { display: flex; justify-content: space-between; gap: 8px; font-size: 12px; color: var(--ink-2); }
+  .meter .bar { height: 8px; border-radius: 4px; background: var(--meter-track); overflow: hidden; margin-top: 4px; }
+  .meter .fill { height: 100%; border-radius: 4px; background: var(--meter-fill); }
+  .heads { margin: 8px 0 0; padding: 0; list-style: none; font-size: 12px; color: var(--ink-2); }
+  .heads li { display: flex; gap: 6px; align-items: center; margin-top: 4px; }
+
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+  .chip { font: inherit; font-size: 13px; border: 1px solid var(--border); background: var(--card); color: var(--ink-2); padding: 4px 10px; border-radius: 999px; cursor: pointer; }
+  .chip[aria-pressed="true"] { background: var(--ink); color: var(--card); border-color: var(--ink); }
+  .table-wrap { overflow-x: auto; margin-top: 8px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th { text-align: left; color: var(--muted); font-weight: 500; font-size: 12px; padding: 6px 8px; border-bottom: 1px solid var(--grid); white-space: nowrap; }
+  td { padding: 8px; border-bottom: 1px solid var(--grid); vertical-align: top; }
+  td.when { white-space: nowrap; color: var(--ink-2); font-variant-numeric: tabular-nums; }
+  td.src { white-space: nowrap; }
+  td.src .key { margin-right: 6px; vertical-align: -1px; }
+  tr:hover td { background: var(--hover); }
+  @media (max-width: 640px) {
+    thead { display: none; }
+    table, tbody, tr, td { display: block; width: 100%; }
+    tr { border-bottom: 1px solid var(--grid); padding: 8px 0; display: grid; grid-template-columns: auto 1fr auto; gap: 2px 10px; }
+    td { border: 0; padding: 0; }
+    td.when { grid-column: 1; }
+    td.src { grid-column: 2; }
+    td.open { grid-column: 3; grid-row: 1; text-align: right; }
+    td.who, td.clinic-cell, td.what, td.detail, td.iecell { grid-column: 1 / -1; }
+    td.who::after { content: " · " attr(data-clinic); color: var(--ink-2); }
+    td.clinic-cell { display: none; }
+    td.what { font-weight: 600; }
+    td.detail { color: var(--ink-2); }
+    td.iecell:empty { display: none; }
+  }
+  .ie { display: inline-block; font-size: 12px; padding: 1px 8px; border-radius: 999px; border: 1px solid var(--border); white-space: nowrap; }
+  a { color: var(--link); }
+  .empty { color: var(--muted); padding: 24px 0; text-align: center; }
+
+  .tooltip { position: fixed; pointer-events: none; z-index: 10; background: var(--card); color: var(--ink); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; font-size: 12px; box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12); min-width: 140px; display: none; }
+  .tooltip .t { color: var(--ink-2); margin-bottom: 4px; }
+  .tooltip .r { display: flex; align-items: center; gap: 8px; }
+  .tooltip .r b { min-width: 22px; text-align: right; font-variant-numeric: tabular-nums; }
+  .tooltip .line { width: 12px; height: 2px; border-radius: 1px; display: inline-block; }
+
+  footer { color: var(--muted); font-size: 12px; margin-top: 16px; }
+  .loading main { opacity: 0.55; transition: opacity 0.15s; }
+  .error { background: var(--card); border: 1px solid var(--critical); border-radius: 12px; padding: 12px 14px; margin-bottom: 16px; display: none; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div>
+      <h1>PCC Watch</h1>
+      <div class="sub" id="todayLabel">Loading…</div>
+    </div>
+    <div class="status" id="status" role="status"><span class="status-icon" id="statusIcon"></span><span class="status-text" id="statusText">Loading…</span></div>
+  </header>
+
+  <div class="filters" role="group" aria-label="Filters">
+    <div class="seg" id="range">
+      <button type="button" data-days="1" aria-pressed="true">Today</button>
+      <button type="button" data-days="7" aria-pressed="false">7 days</button>
+      <button type="button" data-days="30" aria-pressed="false">30 days</button>
+    </div>
+    <select id="clinicFilter" aria-label="Clinic"><option value="">All clinics</option></select>
+    <select id="pccFilter" aria-label="PCC"><option value="">All PCCs</option></select>
+    <button type="button" class="btn" id="refresh">Refresh</button>
+    <span class="muted" id="refreshNote">Refreshes every 5 min</span>
+  </div>
+
+  <div class="error" id="error" role="alert"></div>
+
+  <main>
+    <section class="tiles" id="tiles" aria-label="Totals"></section>
+
+    <section class="grid2">
+      <div class="card">
+        <h2 id="activityTitle">Activity by hour</h2>
+        <div class="legend" id="activityLegend"></div>
+        <div class="chart" id="activityChart"></div>
+      </div>
+      <div class="card">
+        <h2>New patients by PCC</h2>
+        <div class="legend" id="pccLegend"></div>
+        <div class="chart" id="pccChart"></div>
+      </div>
+    </section>
+
+    <div class="section-head">
+      <h2>Clinics today</h2>
+      <span class="muted" id="clinicsNote"></span>
+    </div>
+    <section class="clinics" id="clinics" aria-label="Clinics today"></section>
+
+    <section class="card" aria-label="What happened">
+      <div class="section-head">
+        <h2>What happened</h2>
+        <div class="chips" id="kinds"></div>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>When</th><th>Source</th><th>PCC</th><th>Clinic</th><th>What</th><th>Detail</th><th>IE</th><th>Row</th></tr></thead>
+          <tbody id="feed"></tbody>
+        </table>
+      </div>
+      <div class="muted" id="feedNote"></div>
+    </section>
+  </main>
+
+  <footer>
+    No patient names are shown here. Use “Open” to see the row in its sheet.
+    NPS work is credited by “Taken By”; UL, Huddle and Collected? work goes to the clinic’s PCC
+    (or to the signer of a UL note).
+    <span id="sheetLink"></span>
+  </footer>
+</div>
+<div class="tooltip" id="tip"></div>
+
+<script>
+(function () {
+  'use strict';
+
+  var SOURCES = [
+    { key: 'NPS', label: 'NPS', color: 'var(--s-nps)' },
+    { key: 'UL', label: 'UL', color: 'var(--s-ul)' },
+    { key: 'Huddle', label: 'Huddle', color: 'var(--s-huddle)' },
+    { key: 'Collections', label: 'Collections', color: 'var(--s-col)' },
+  ];
+  var KINDS = [
+    { key: 'all', label: 'All', types: null },
+    { key: 'new', label: 'New patients', types: ['new_entry', 'claimed_lead', 'ie_booked', 'new_patient'] },
+    { key: 'sched', label: 'Scheduling', types: ['scheduled', 'reason', 'booked', 'not_booked'] },
+    { key: 'notes', label: 'Notes', types: ['note'] },
+    { key: 'col', label: 'Collections', types: ['collected', 'not_collected'] },
+  ];
+  var FEED_LIMIT = 250;
+  var REFRESH_MS = 5 * 60 * 1000;
+  var NS = 'http://www.w3.org/2000/svg';
+
+  var view = { days: 1, clinic: '', pcc: '', kind: 'all', data: null };
+
+  // -------------------------------------------------------------------------
+  // Data
+  // -------------------------------------------------------------------------
+  function fetchData(days) {
+    if (window.PCC_PREVIEW_DATA) return Promise.resolve(window.PCC_PREVIEW_DATA(days));
+    return new Promise(function (resolve, reject) {
+      google.script.run.withSuccessHandler(resolve).withFailureHandler(reject).getDashboardData(days);
+    });
+  }
+
+  function load() {
+    document.body.classList.add('loading');
+    fetchData(view.days).then(function (data) {
+      view.data = data;
+      hideError();
+      render();
+    }).catch(function (err) {
+      showError('Couldn’t load the dashboard: ' + (err && err.message ? err.message : err));
+    }).then(function () {
+      document.body.classList.remove('loading');
+    });
+  }
+
+  function matchesPcc(label, pcc) {
+    return !pcc || String(label).split(' / ').indexOf(pcc) !== -1;
+  }
+
+  function filteredEvents() {
+    var d = view.data;
+    return d.events.filter(function (e) {
+      if (view.clinic && e.forClinic !== view.clinic && e.clinic !== view.clinic) return false;
+      return matchesPcc(e.pcc, view.pcc);
+    });
+  }
+
+  function filteredClinics() {
+    return view.data.clinics.filter(function (c) {
+      if (view.clinic && c.clinic !== view.clinic) return false;
+      return matchesPcc(c.pcc, view.pcc);
+    });
+  }
+
+  // -------------------------------------------------------------------------
+  // DOM helpers (all data goes in through textContent)
+  // -------------------------------------------------------------------------
+  function el(tag, cls, text) {
+    var n = document.createElement(tag);
+    if (cls) n.className = cls;
+    if (text !== undefined && text !== null) n.textContent = text;
+    return n;
+  }
+  function svg(tag, attrs) {
+    var n = document.createElementNS(NS, tag);
+    Object.keys(attrs || {}).forEach(function (k) { n.setAttribute(k, attrs[k]); });
+    return n;
+  }
+  function clear(node) { while (node.firstChild) node.removeChild(node.firstChild); }
+  function fmt(n) { return Number(n || 0).toLocaleString('en-US'); }
+  function money(n) { return '$' + Number(n || 0).toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 }); }
+  function count(events, types) {
+    return events.filter(function (e) { return types.indexOf(e.type) !== -1; }).length;
+  }
+  function dayLabel(iso, withWeekday) {
+    var p = iso.split('-');
+    var dt = new Date(Number(p[0]), Number(p[1]) - 1, Number(p[2]));
+    var md = (dt.getMonth() + 1) + '/' + dt.getDate();
+    return withWeekday ? dt.toLocaleDateString('en-US', { weekday: 'short' }) + ' ' + md : md;
+  }
+  function sourceColor(key) {
+    for (var i = 0; i < SOURCES.length; i++) if (SOURCES[i].key === key) return SOURCES[i].color;
+    return 'var(--muted)';
+  }
+
+  // -------------------------------------------------------------------------
+  // Render
+  // -------------------------------------------------------------------------
+  function render() {
+    var d = view.data;
+    document.getElementById('todayLabel').textContent = d.todayLabel;
+    renderStatus(d);
+    renderFilters(d);
+    var events = filteredEvents();
+    renderTiles(events);
+    renderActivity(events);
+    renderPccChart(events);
+    renderClinics();
+    renderFeed(events);
+    var link = document.getElementById('sheetLink');
+    clear(link);
+    if (d.sheetUrl) {
+      link.appendChild(document.createTextNode(' Raw data: '));
+      var a = el('a', null, 'PCC Watch sheet');
+      a.href = d.sheetUrl;
+      a.target = '_blank';
+      a.rel = 'noopener';
+      link.appendChild(a);
+      link.appendChild(document.createTextNode('.'));
+    }
+  }
+
+  function renderStatus(d) {
+    var box = document.getElementById('status');
+    var icon = document.getElementById('statusIcon');
+    var text = document.getElementById('statusText');
+    var run = d.lastRun;
+    var cls = 'ok';
+    var msg;
+    if (!run) {
+      cls = 'warn';
+      icon.textContent = '!';
+      msg = 'No check has run yet';
+    } else if (run.errors && run.errors.length) {
+      cls = 'bad';
+      icon.textContent = '!';
+      msg = 'Last check ' + run.time + ' · couldn’t read: ' + run.errors.join(' · ');
+    } else if (d.now - run.at > 3 * d.everyMinutes * 60 * 1000) {
+      cls = 'warn';
+      icon.textContent = '!';
+      msg = 'Last check ' + run.time + ' (checks run Mon–Sat, 7 AM–7 PM)';
+    } else {
+      icon.textContent = '✓';
+      msg = 'Updated ' + run.time + ' · checks every ' + d.everyMinutes + ' min';
+    }
+    box.className = 'status ' + cls;
+    text.textContent = msg;
+  }
+
+  function renderFilters(d) {
+    fillSelect(document.getElementById('clinicFilter'), 'All clinics',
+      d.clinics.map(function (c) { return c.clinic; }), view.clinic);
+    fillSelect(document.getElementById('pccFilter'), 'All PCCs', d.pccs, view.pcc);
+    Array.prototype.forEach.call(document.querySelectorAll('#range button'), function (b) {
+      b.setAttribute('aria-pressed', String(Number(b.getAttribute('data-days')) === view.days));
+    });
+  }
+
+  function fillSelect(sel, allLabel, values, current) {
+    clear(sel);
+    var all = el('option', null, allLabel);
+    all.value = '';
+    sel.appendChild(all);
+    values.forEach(function (v) {
+      var o = el('option', null, v);
+      o.value = v;
+      if (v === current) o.selected = true;
+      sel.appendChild(o);
+    });
+  }
+
+  function renderTiles(events) {
+    var box = document.getElementById('tiles');
+    clear(box);
+    var range = view.days === 1 ? 'today' : 'last ' + view.days + ' days';
+    var npsNew = count(events, ['new_entry', 'claimed_lead']);
+    var claimed = count(events, ['claimed_lead']);
+    var ies = events.filter(function (e) {
+      return e.type === 'ie_booked' || ((e.type === 'new_entry' || e.type === 'claimed_lead') && e.ie);
+    }).length;
+    var clinics = filteredClinics();
+    var listTotal = clinics.reduce(function (s, c) { return s + (c.nothingBooked || 0); }, 0);
+    var collectedDollars = view.days === 1 ? clinics.reduce(function (s, c) { return s + (c.counts.collectedDollars || 0); }, 0) : null;
+    var tiles = [
+      { label: 'New patients on the NPS', color: 'var(--s-nps)', value: npsNew,
+        note: claimed ? claimed + ' were web / AI leads claimed' : range },
+      { label: 'IEs booked', color: 'var(--s-nps)', value: ies, note: 'from NPS entries, ' + range },
+      { label: 'Added to the UL', color: 'var(--s-ul)', value: count(events, ['new_patient']), note: range },
+      { label: 'Visits scheduled', color: 'var(--s-ul)', value: count(events, ['scheduled']), note: '# SCHED raised on the UL' },
+      { label: 'Marked booked', color: 'var(--s-huddle)', value: count(events, ['booked']),
+        note: view.days === 1 && listTotal ? 'of ' + fmt(listTotal) + ' on today’s nothing-booked list' : 'on the Huddle list' },
+      { label: 'Marked collected', color: 'var(--s-col)', value: count(events, ['collected']),
+        note: collectedDollars ? money(collectedDollars) + ' in full' : 'Collected? on the pay lists' },
+    ];
+    tiles.forEach(function (t) {
+      var tile = el('div', 'tile');
+      var label = el('div', 'label');
+      var key = el('span', 'key');
+      key.style.background = t.color;
+      label.appendChild(key);
+      label.appendChild(document.createTextNode(t.label));
+      tile.appendChild(label);
+      tile.appendChild(el('div', 'value', fmt(t.value)));
+      tile.appendChild(el('div', 'note', t.note));
+      box.appendChild(tile);
+    });
+  }
+
+  function legend(node, series, shape) {
+    clear(node);
+    series.forEach(function (s) {
+      var item = el('span');
+      var key = el('span', 'key');
+      key.style.background = s.color;
+      if (shape === 'line') { key.style.height = '2px'; key.style.width = '12px'; }
+      item.appendChild(key);
+      item.appendChild(document.createTextNode(s.label));
+      node.appendChild(item);
+    });
+  }
+
+  /** Stacked columns: events per hour (today) or per day, split by source. */
+  function renderActivity(events) {
+    var title = document.getElementById('activityTitle');
+    var buckets = [];
+    var byKey = {};
+    if (view.days === 1) {
+      title.textContent = 'Activity by hour (today)';
+      for (var h = 7; h <= 18; h++) {
+        var lab = (h % 12 === 0 ? 12 : h % 12) + (h < 12 ? 'a' : 'p');
+        var full = (h % 12 === 0 ? 12 : h % 12) + ':00 ' + (h < 12 ? 'AM' : 'PM');
+        var b = { key: String(h), label: lab, title: full, values: {} };
+        buckets.push(b);
+        byKey[b.key] = b;
+      }
+      events.forEach(function (e) {
+        var k = String(Math.min(18, Math.max(7, e.hour)));
+        add(byKey[k], e.source);
+      });
+    } else {
+      title.textContent = 'Activity by day (last ' + view.days + ' days)';
+      var p = view.data.today.split('-');
+      var end = new Date(Number(p[0]), Number(p[1]) - 1, Number(p[2]));
+      for (var i = view.days - 1; i >= 0; i--) {
+        var dt = new Date(end.getFullYear(), end.getMonth(), end.getDate() - i);
+        var iso = dt.getFullYear() + '-' + ('0' + (dt.getMonth() + 1)).slice(-2) + '-' + ('0' + dt.getDate()).slice(-2);
+        var bd = { key: iso, label: dayLabel(iso, false), title: dayLabel(iso, true), values: {} };
+        buckets.push(bd);
+        byKey[iso] = bd;
+      }
+      events.forEach(function (e) { if (byKey[e.day]) add(byKey[e.day], e.source); });
+    }
+    function add(b, src) { if (b) b.values[src] = (b.values[src] || 0) + 1; }
+    legend(document.getElementById('activityLegend'), SOURCES, 'rect');
+    columnChart(document.getElementById('activityChart'), buckets, SOURCES);
+  }
+
+  function niceScale(max) {
+    if (max <= 4) return { max: 4, step: 1 };
+    var raw = max / 4;
+    var mag = Math.pow(10, Math.floor(Math.log(raw) / Math.LN10));
+    var step = [1, 2, 2.5, 5, 10].map(function (m) { return m * mag; }).filter(function (s) { return s >= raw; })[0];
+    step = Math.max(1, Math.ceil(step));
+    return { max: Math.ceil(max / step) * step, step: step };
+  }
+
+  /** Rounded top (data end), square bottom (baseline). */
+  function topRoundedRect(x, y, w, h, r) {
+    r = Math.min(r, w / 2, h);
+    return 'M' + x + ',' + (y + h) + 'L' + x + ',' + (y + r) + 'Q' + x + ',' + y + ' ' + (x + r) + ',' + y +
+      'L' + (x + w - r) + ',' + y + 'Q' + (x + w) + ',' + y + ' ' + (x + w) + ',' + (y + r) + 'L' + (x + w) + ',' + (y + h) + 'Z';
+  }
+
+  function columnChart(node, buckets, series) {
+    clear(node);
+    var W = Math.max(320, node.clientWidth || 640);
+    var H = 230;
+    var m = { l: 34, r: 8, t: 10, b: 26 };
+    var pw = W - m.l - m.r;
+    var ph = H - m.t - m.b;
+    var totals = buckets.map(function (b) {
+      return series.reduce(function (s, x) { return s + (b.values[x.key] || 0); }, 0);
+    });
+    var maxTotal = Math.max.apply(null, totals.concat([0]));
+    var scale = niceScale(maxTotal);
+    var root = svg('svg', { viewBox: '0 0 ' + W + ' ' + H, role: 'img',
+      'aria-label': 'Events per ' + (view.days === 1 ? 'hour' : 'day') + ', stacked by source. Details are in the table below.' });
+
+    for (var v = 0; v <= scale.max; v += scale.step) {
+      var y = m.t + ph - (v / scale.max) * ph;
+      root.appendChild(svg('line', { x1: m.l, x2: W - m.r, y1: y, y2: y,
+        stroke: v === 0 ? 'var(--axis)' : 'var(--grid)', 'stroke-width': 1 }));
+      var t = svg('text', { x: m.l - 6, y: y + 4, 'text-anchor': 'end' });
+      t.textContent = fmt(v);
+      root.appendChild(t);
+    }
+
+    var band = pw / buckets.length;
+    var barW = Math.min(24, Math.max(4, band * 0.62));
+    var every = Math.max(1, Math.ceil(28 / band));
+    buckets.forEach(function (b, i) {
+      var x = m.l + band * i + (band - barW) / 2;
+      var base = m.t + ph;
+      var stacked = series.filter(function (s) { return b.values[s.key]; });
+      stacked.forEach(function (s, j) {
+        var h = (b.values[s.key] / scale.max) * ph;
+        var top = base - h;
+        var drawH = j > 0 ? Math.max(1, h - 2) : h;
+        var isTop = j === stacked.length - 1;
+        var shape = isTop ? svg('path', { d: topRoundedRect(x, top, barW, drawH, 4), fill: s.color })
+          : svg('rect', { x: x, y: top, width: barW, height: drawH, fill: s.color });
+        root.appendChild(shape);
+        base = top;
+      });
+      if (i % every === 0) {
+        var lab = svg('text', { x: m.l + band * i + band / 2, y: H - 8, 'text-anchor': 'middle' });
+        lab.textContent = b.label;
+        root.appendChild(lab);
+      }
+      var hit = svg('rect', { class: 'hit', x: m.l + band * i, y: m.t, width: band, height: ph, tabindex: 0,
+        'aria-label': b.title + ': ' + series.map(function (s) { return s.label + ' ' + (b.values[s.key] || 0); }).join(', ') });
+      var rows = series.map(function (s) { return { color: s.color, label: s.label, value: b.values[s.key] || 0 }; });
+      bindTip(hit, b.title, rows);
+      root.appendChild(hit);
+    });
+    node.appendChild(root);
+  }
+
+  /** Horizontal stacked bars per PCC: NPS new + UL patients added. */
+  function renderPccChart(events) {
+    var node = document.getElementById('pccChart');
+    var series = [
+      { key: 'nps', label: 'New on the NPS', color: 'var(--s-nps)' },
+      { key: 'ul', label: 'Added to the UL', color: 'var(--s-ul)' },
+    ];
+    legend(document.getElementById('pccLegend'), series, 'rect');
+    var people = view.data.pccs.filter(function (p) { return !view.pcc || p === view.pcc; });
+    if (view.clinic) {
+      people = people.filter(function (p) {
+        return view.data.clinics.some(function (c) { return c.clinic === view.clinic && matchesPcc(c.pcc, p); });
+      });
+    }
+    // One row per person credited, plus one per shared credit (e.g. both
+    // Metuchen PCCs), so each event is counted exactly once.
+    var names = people.slice();
+    events.forEach(function (e) {
+      if (names.indexOf(e.pcc) === -1 && (!view.pcc || matchesPcc(e.pcc, view.pcc))) names.push(e.pcc);
+    });
+    var rows = names.map(function (p) {
+      var mine = events.filter(function (e) { return e.pcc === p; });
+      return { name: p, nps: count(mine, ['new_entry', 'claimed_lead']), ul: count(mine, ['new_patient']) };
+    }).filter(function (r) { return people.indexOf(r.name) !== -1 || r.nps + r.ul > 0; });
+    rows.sort(function (a, b) { return (b.nps + b.ul) - (a.nps + a.ul) || a.name.localeCompare(b.name); });
+    clear(node);
+    if (!rows.length) { node.appendChild(el('div', 'empty', 'No PCCs match the filters.')); return; }
+
+    var W = Math.max(300, node.clientWidth || 420);
+    var rowH = 30;
+    rows.forEach(function (r) { r.label = shortName(r.name); });
+    var labelW = Math.min(W * 0.45, 12 + Math.max.apply(null, rows.map(function (r) { return textWidth(r.label); })));
+    var m = { t: 4, r: 36 };
+    var H = m.t + rows.length * rowH + 4;
+    var pw = W - labelW - m.r;
+    var max = Math.max(4, Math.max.apply(null, rows.map(function (r) { return r.nps + r.ul; })));
+    var root = svg('svg', { viewBox: '0 0 ' + W + ' ' + H, role: 'img',
+      'aria-label': 'New patients per PCC. ' + rows.map(function (r) { return r.name + ' ' + (r.nps + r.ul); }).join(', ') });
+    root.appendChild(svg('line', { x1: labelW, x2: labelW, y1: m.t, y2: H - 4, stroke: 'var(--axis)', 'stroke-width': 1 }));
+    rows.forEach(function (r, i) {
+      var cy = m.t + i * rowH + rowH / 2;
+      var name = svg('text', { class: 'name', x: labelW - 8, y: cy + 4, 'text-anchor': 'end' });
+      name.textContent = r.label;
+      root.appendChild(name);
+      var x = labelW;
+      var parts = series.filter(function (s) { return r[s.key]; });
+      parts.forEach(function (s, j) {
+        var w = (r[s.key] / max) * pw;
+        var drawW = j > 0 ? Math.max(1, w - 2) : w;
+        var x0 = j > 0 ? x + 2 : x;
+        var isEnd = j === parts.length - 1;
+        var shape = isEnd
+          ? svg('path', { d: rightRoundedRect(x0, cy - 8, drawW, 16, 4), fill: s.color })
+          : svg('rect', { x: x0, y: cy - 8, width: drawW, height: 16, fill: s.color });
+        root.appendChild(shape);
+        x += w;
+      });
+      var total = svg('text', { class: 'val', x: x + 6, y: cy + 4 });
+      total.textContent = fmt(r.nps + r.ul);
+      root.appendChild(total);
+      var hit = svg('rect', { class: 'hit', x: 0, y: m.t + i * rowH, width: W, height: rowH, tabindex: 0,
+        'aria-label': r.name + ': ' + r.nps + ' new on the NPS, ' + r.ul + ' added to the UL' });
+      bindTip(hit, r.name + (r.label !== r.name ? ' (shared credit)' : ''),
+        series.map(function (s) { return { color: s.color, label: s.label, value: r[s.key] }; }));
+      root.appendChild(hit);
+    });
+    node.appendChild(root);
+  }
+
+  /** "Kim Collins / Brandon Vargas" (credit shared by a clinic's PCCs) -> "Kim / Brandon (shared)". */
+  function shortName(label) {
+    var parts = String(label).split(' / ');
+    if (parts.length < 2) return label;
+    return parts.map(function (p) { return p.split(' ')[0]; }).join(' / ') + ' (shared)';
+  }
+
+  var measureCtx = null;
+  function textWidth(text) {
+    if (!measureCtx) {
+      measureCtx = document.createElement('canvas').getContext('2d');
+      measureCtx.font = '12px system-ui, -apple-system, "Segoe UI", sans-serif';
+    }
+    return measureCtx.measureText(text).width;
+  }
+
+  /** Square at the baseline (left), rounded at the data end (right). */
+  function rightRoundedRect(x, y, w, h, r) {
+    r = Math.min(r, h / 2, w);
+    return 'M' + x + ',' + y + 'L' + (x + w - r) + ',' + y + 'Q' + (x + w) + ',' + y + ' ' + (x + w) + ',' + (y + r) +
+      'L' + (x + w) + ',' + (y + h - r) + 'Q' + (x + w) + ',' + (y + h) + ' ' + (x + w - r) + ',' + (y + h) + 'L' + x + ',' + (y + h) + 'Z';
+  }
+
+  function renderClinics() {
+    var box = document.getElementById('clinics');
+    clear(box);
+    document.getElementById('clinicsNote').textContent = view.days === 1 ? '' : 'Clinic cards always show today';
+    var clinics = filteredClinics();
+    if (!clinics.length) { box.appendChild(el('div', 'empty', 'No clinics match the filters.')); return; }
+    clinics.forEach(function (c) {
+      var card = el('div', 'card clinic');
+      var top = el('div', 'top');
+      var name = el('div');
+      name.appendChild(el('h3', null, c.clinic));
+      name.appendChild(el('div', 'who', c.pcc));
+      top.appendChild(name);
+      var quiet = c.heads.indexOf('No activity yet today') !== -1;
+      if (c.last || quiet) {
+        var badge = el('span', 'badge ' + (quiet ? 'warn' : 'good'));
+        badge.appendChild(el('span', 'ico', quiet ? '!' : '✓'));
+        badge.appendChild(document.createTextNode(quiet ? 'No activity yet' : 'Last ' + timeOf(c.last)));
+        top.appendChild(badge);
+      }
+      card.appendChild(top);
+
+      var n = c.counts;
+      var grid = el('div', 'counts');
+      [[n.npsNew + n.npsClaimed, 'NPS new'], [n.ulNew, 'UL added'], [n.ulScheduled, 'Scheduled'],
+        [n.ulNotes + n.ulReasons, 'Notes & reasons']].forEach(function (p) {
+        var cell = el('div');
+        cell.appendChild(el('b', null, fmt(p[0])));
+        cell.appendChild(el('span', null, p[1]));
+        grid.appendChild(cell);
+      });
+      card.appendChild(grid);
+
+      if (c.nothingBooked !== null) {
+        meter(card, 'Booked from the nothing-booked list',
+          fmt(n.booked) + ' of ' + fmt(c.nothingBooked) + (n.bookedNo ? ' · ' + n.bookedNo + ' not booked' : ''),
+          c.nothingBooked ? n.booked / c.nothingBooked : 0);
+      }
+      if (c.collectPts !== null) {
+        meter(card, 'Collected at check-in',
+          fmt(n.collected) + ' of ' + fmt(c.collectPts) + ' pts' + (c.collectDollars !== null ? ' · ' + money(n.collectedDollars) + ' of ' + money(c.collectDollars) : ''),
+          c.collectPts ? n.collected / c.collectPts : 0);
+      }
+      var heads = el('ul', 'heads');
+      if (c.yesterday) {
+        heads.appendChild(el('li', null, 'Yesterday collected ' + money(c.yesterday.collected) + ' of ' + money(c.yesterday.should) +
+          (c.yesterday.pct !== null ? ' (' + Math.round(c.yesterday.pct * 100) + '%)' : '')));
+      }
+      if (c.newIe !== null) heads.appendChild(el('li', null, fmt(c.newIe) + ' new IE' + (c.newIe === 1 ? '' : 's') + ' on today’s Huddle'));
+      c.heads.filter(function (h) { return h !== 'No activity yet today'; }).forEach(function (h) {
+        var li = el('li');
+        var ico = el('span', 'badge warn');
+        ico.appendChild(el('span', 'ico', '!'));
+        li.appendChild(ico);
+        li.appendChild(document.createTextNode(h));
+        heads.appendChild(li);
+      });
+      if (heads.childNodes.length) card.appendChild(heads);
+      box.appendChild(card);
+    });
+  }
+
+  function meter(card, label, value, share) {
+    var m = el('div', 'meter');
+    var row = el('div', 'row');
+    row.appendChild(el('span', null, label));
+    row.appendChild(el('span', null, value));
+    m.appendChild(row);
+    var bar = el('div', 'bar');
+    bar.setAttribute('role', 'img');
+    bar.setAttribute('aria-label', label + ': ' + value);
+    var fill = el('div', 'fill');
+    fill.style.width = Math.round(Math.max(0, Math.min(1, share)) * 100) + '%';
+    bar.appendChild(fill);
+    m.appendChild(bar);
+    card.appendChild(m);
+  }
+
+  function timeOf(ms) {
+    var d = new Date(ms);
+    return d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+  }
+
+  function renderFeed(events) {
+    var chips = document.getElementById('kinds');
+    clear(chips);
+    KINDS.forEach(function (k) {
+      var b = el('button', 'chip', k.label);
+      b.type = 'button';
+      b.setAttribute('aria-pressed', String(view.kind === k.key));
+      b.addEventListener('click', function () { view.kind = k.key; render(); });
+      chips.appendChild(b);
+    });
+    var kind = KINDS.filter(function (k) { return k.key === view.kind; })[0];
+    var rows = kind.types ? events.filter(function (e) { return kind.types.indexOf(e.type) !== -1; }) : events;
+    var body = document.getElementById('feed');
+    clear(body);
+    var note = document.getElementById('feedNote');
+    note.textContent = '';
+    if (!rows.length) {
+      var tr = el('tr');
+      var td = el('td', 'empty', 'Nothing yet for this range and filter.');
+      td.colSpan = 8;
+      tr.appendChild(td);
+      body.appendChild(tr);
+      return;
+    }
+    rows.slice(0, FEED_LIMIT).forEach(function (e) {
+      var tr = el('tr');
+      tr.appendChild(el('td', 'when', view.days === 1 ? e.time : dayLabel(e.day, true) + ' · ' + e.time));
+      var src = el('td', 'src');
+      var key = el('span', 'key');
+      key.style.background = sourceColor(e.source);
+      src.appendChild(key);
+      src.appendChild(document.createTextNode(e.source));
+      tr.appendChild(src);
+      var who = el('td', 'who', e.pcc);
+      who.title = e.how;
+      who.setAttribute('data-clinic', e.forClinic);
+      tr.appendChild(who);
+      tr.appendChild(el('td', 'clinic-cell', e.forClinic));
+      tr.appendChild(el('td', 'what', e.what));
+      tr.appendChild(el('td', 'detail', e.detail));
+      var ie = el('td', 'iecell');
+      if (e.ie) ie.appendChild(el('span', 'ie', 'IE ' + dayLabel(e.ie, true)));
+      tr.appendChild(ie);
+      var link = el('td', 'open');
+      if (e.link) {
+        var a = el('a', null, 'Open');
+        a.href = e.link;
+        a.target = '_blank';
+        a.rel = 'noopener';
+        a.setAttribute('aria-label', 'Open the row in its sheet');
+        link.appendChild(a);
+      }
+      tr.appendChild(link);
+      body.appendChild(tr);
+    });
+    if (rows.length > FEED_LIMIT) note.textContent = 'Showing the newest ' + FEED_LIMIT + ' of ' + fmt(rows.length) + '. Narrow the range or filters to see the rest.';
+  }
+
+  // -------------------------------------------------------------------------
+  // Tooltip
+  // -------------------------------------------------------------------------
+  var tip = document.getElementById('tip');
+  function bindTip(target, title, rows) {
+    function show(evt) {
+      clear(tip);
+      tip.appendChild(el('div', 't', title));
+      rows.forEach(function (r) {
+        var line = el('div', 'r');
+        var key = el('span', 'line');
+        key.style.background = r.color;
+        line.appendChild(key);
+        line.appendChild(el('b', null, fmt(r.value)));
+        line.appendChild(el('span', null, r.label));
+        tip.appendChild(line);
+      });
+      tip.style.display = 'block';
+      place(evt);
+    }
+    function place(evt) {
+      var x, y;
+      if (evt && evt.clientX !== undefined) { x = evt.clientX; y = evt.clientY; } else {
+        var b = target.getBoundingClientRect();
+        x = b.left + b.width / 2; y = b.top;
+      }
+      var w = tip.offsetWidth;
+      var h = tip.offsetHeight;
+      tip.style.left = Math.min(window.innerWidth - w - 8, Math.max(8, x + 12)) + 'px';
+      tip.style.top = Math.max(8, y - h - 12) + 'px';
+    }
+    function hide() { tip.style.display = 'none'; }
+    target.addEventListener('pointerenter', show);
+    target.addEventListener('pointermove', place);
+    target.addEventListener('pointerleave', hide);
+    target.addEventListener('focus', show);
+    target.addEventListener('blur', hide);
+  }
+
+  // -------------------------------------------------------------------------
+  // Errors, controls, refresh
+  // -------------------------------------------------------------------------
+  function showError(msg) {
+    var box = document.getElementById('error');
+    box.textContent = msg;
+    box.style.display = 'block';
+  }
+  function hideError() { document.getElementById('error').style.display = 'none'; }
+
+  Array.prototype.forEach.call(document.querySelectorAll('#range button'), function (b) {
+    b.addEventListener('click', function () {
+      view.days = Number(b.getAttribute('data-days'));
+      load();
+    });
+  });
+  document.getElementById('clinicFilter').addEventListener('change', function (e) { view.clinic = e.target.value; render(); });
+  document.getElementById('pccFilter').addEventListener('change', function (e) { view.pcc = e.target.value; render(); });
+  document.getElementById('refresh').addEventListener('click', load);
+  var resizeTimer = null;
+  window.addEventListener('resize', function () {
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(function () { if (view.data) render(); }, 150);
+  });
+  setInterval(load, REFRESH_MS);
+  load();
+})();
+</script>
+</body>
+</html>

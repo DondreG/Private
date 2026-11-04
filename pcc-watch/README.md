@@ -6,8 +6,45 @@ the **NPS** and their clinic's **UL** first, plus the **PCC Daily Huddle**
 anyone changing how they work.
 
 Every 15 minutes (Mon–Sat, 7 AM–7 PM) a Google Apps Script running as you
-takes a snapshot of those sheets, compares it with the last one, and writes
-what changed into one **PCC Watch** spreadsheet:
+takes a snapshot of those sheets and compares it with the last one. What
+changed shows up on a **dashboard**: a web page served by the same script
+that works on a phone and refreshes itself every 5 minutes.
+
+![PCC Watch dashboard, made-up sample data](docs/dashboard-today.png)
+
+*The screenshot uses invented sample data.*
+
+## The dashboard
+
+- **Range and filters:** Today, 7 days or 30 days, filtered by clinic or PCC.
+- **Totals:**
+  - new patients on the NPS
+  - IEs booked
+  - patients added to the UL
+  - visits scheduled
+  - Huddle "booked" marks, against today's nothing-booked list
+  - "Collected" marks, with dollars
+- **Activity chart:** events by hour for today, by day for longer ranges, split
+  into NPS, UL, Huddle and Collections. Hover a bar for the counts.
+- **New patients by PCC:** NPS entries and UL additions per person. PCCs at zero
+  are listed too, so a quiet PCC stands out. Work shared by a clinic's two PCCs
+  gets its own "(shared)" row.
+- **Clinics today:**
+  - one card per clinic, with its PCC and their last activity
+  - a "No activity yet" flag in the afternoon
+  - Huddle "booked" progress and collection progress against today's targets
+  - yesterday's collection rate
+- **What happened:** every event, newest first.
+  - For each event: when, PCC, the clinic the patient is for, what changed,
+    the IE date when the NPS has one, and **Open** to jump to the row.
+  - Filter chips: New patients, Scheduling, Notes, Collections.
+
+Nothing on the dashboard identifies a patient. To see who it is, click
+**Open**. That opens the row in the source sheet, which only people with
+access to that sheet can do.
+
+Behind the dashboard, the script keeps its records in one **PCC Watch**
+spreadsheet. You don't need to open it, but it's there:
 
 | Tab | What's on it |
 | --- | --- |
@@ -81,7 +118,9 @@ the log.
 3. Check the `CONFIG` block at the top. The file IDs for the Huddle, Patient
    Responsibility and the 9 PCC clinic ULs are already filled in. Optional:
    set `FOLDER_ID` to the familiar's Drive folder so the output lives there.
-4. Pick **`setup`** in the function dropdown → **Run** → approve the access it
+4. **+ Add a file → HTML**, name it **`Dashboard`** (no extension), and replace
+   its contents with [`Dashboard.html`](Dashboard.html).
+5. Pick **`setup`** in the function dropdown → **Run** → approve the access it
    asks for:
    - read the sheets
    - create its own sheet and state file
@@ -91,7 +130,16 @@ the log.
    This creates the **PCC Watch** sheet, takes a first snapshot (no alerts
    for anything already there) and schedules a check every 15 minutes. The
    log prints the sheet's link.
-5. Open the sheet's **Roster** tab and fix anything that's off:
+6. **Deploy → New deployment →** gear icon **→ Web app**:
+   - **Execute as:** Me
+   - **Who has access:** Only myself. Pick "Anyone within Trinity Rehab" only
+     if you want to share the page with, say, Danielle.
+
+   Click **Deploy** and bookmark the URL it gives you (on your phone too).
+   That's your dashboard. From now on the emails link to it. After changing
+   the code later, use **Deploy → Manage deployments → Edit → New version** to
+   keep the same URL.
+7. Open the PCC Watch sheet's **Roster** tab and fix anything that's off:
    - **Flemington** has no PCC yet. Add the name, plus the first name they
      type in the NPS "Taken By".
    - **Upper Dublin** is set to **Leah Carpenter**, from the PCC Regroup
@@ -133,8 +181,16 @@ has seen, so nothing gets logged twice or missed.
 node pcc-watch/test/run-tests.js
 ```
 
+To see the dashboard with made-up sample data (screenshots in light, dark,
+phone and hover views):
+
+```
+node pcc-watch/test/preview-dashboard.js /tmp/pcc-preview
+```
+
 The tests run `Code.gs` under Node against fake Apps Script services
-(`test/gas-mock.js`) and made-up sheets shaped like the real ones. They
+(`test/gas-mock.js`) and made-up sheets shaped like the real ones
+(`test/fixtures.js`). They
 simulate a full day plus the next morning's rebuilds and check:
 - every event type and how it's credited
 - re-sorting, corrected names and new week tabs
