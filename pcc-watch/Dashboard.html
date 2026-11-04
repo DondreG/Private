@@ -206,7 +206,7 @@
     <select id="clinicFilter" aria-label="Clinic"><option value="">All clinics</option></select>
     <select id="pccFilter" aria-label="PCC"><option value="">All PCCs</option></select>
     <button type="button" class="btn" id="refresh">Refresh</button>
-    <span class="muted" id="refreshNote">Refreshes every 5 min</span>
+    <span class="muted" id="refreshNote">Today and 7 days refresh every 5 min</span>
   </div>
 
   <div class="error" id="error" role="alert"></div>
@@ -291,16 +291,20 @@
     });
   }
 
+  var requestSeq = 0;
   function load() {
+    var mine = ++requestSeq;
     document.body.classList.add('loading');
     fetchData(view.days).then(function (data) {
+      if (mine !== requestSeq) return;
       view.data = data;
       hideError();
       render();
     }).catch(function (err) {
+      if (mine !== requestSeq) return;
       showError('Couldn’t load the dashboard: ' + (err && err.message ? err.message : err));
     }).then(function () {
-      document.body.classList.remove('loading');
+      if (mine === requestSeq) document.body.classList.remove('loading');
     });
   }
 
@@ -436,8 +440,14 @@
     var range = view.days === 1 ? 'today' : 'last ' + view.days + ' days';
     var npsNew = count(events, ['new_entry', 'claimed_lead']);
     var claimed = count(events, ['claimed_lead']);
+    // One IE per NPS row, even if both its entry and a later "IE booked" are listed.
+    var ieRows = {};
     var ies = events.filter(function (e) {
-      return e.type === 'ie_booked' || ((e.type === 'new_entry' || e.type === 'claimed_lead') && e.ie);
+      if (!(e.type === 'ie_booked' || ((e.type === 'new_entry' || e.type === 'claimed_lead') && e.ie))) return false;
+      var k = e.link || e.type + e.at + e.detail;
+      if (ieRows[k]) return false;
+      ieRows[k] = 1;
+      return true;
     }).length;
     var clinics = filteredClinics();
     var listTotal = clinics.reduce(function (s, c) { return s + (c.nothingBooked || 0); }, 0);
@@ -889,7 +899,8 @@
     clearTimeout(resizeTimer);
     resizeTimer = setTimeout(function () { if (view.data) render(); }, 150);
   });
-  setInterval(load, REFRESH_MS);
+  // Today and 7 days refresh themselves; the longer views reload on demand.
+  setInterval(function () { if (view.days <= 7) load(); }, REFRESH_MS);
   load();
 })();
 </script>

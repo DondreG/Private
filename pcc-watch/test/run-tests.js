@@ -295,10 +295,11 @@ check('the "no activity" email is sent once a day', () => {
 
 // After the 10th, last month's NPS is no longer watched.
 run(w, d(2026, 11, 11, 9, 0));
-check('October NPS drops out of the state after 11/10', () => {
+check('after 11/10 October NPS is no longer read, but its credited rows are remembered', () => {
   const state = JSON.parse(gas.files[gas.props.PCC_WATCH_STATE_FILE_ID].content);
-  assert(!state.nps['nps-oct']);
-  assert(state.nps['nps-nov']);
+  assert.deepStrictEqual(state.nps['nps-oct'].tabs, {});
+  assert(state.nps['nps-oct'].credited);
+  assert(Object.keys(state.nps['nps-nov'].tabs).length > 0);
 });
 
 console.log('\nReview regressions');
@@ -732,6 +733,125 @@ console.log('\nBackfill (October + November)');
     const e = activity(x).find((r) => r[8] === 'ie_booked');
     assert(e && e[1] === 'Emily Freire', e && e.join('|'));
   });
+}
+
+console.log('\nBackfill review regressions');
+{
+  const x = buildWorld();
+  REGRESSION_WORLDS.push(x);
+  const c = x.code;
+  const P = x.P;
+  // Before the watcher starts (11/4 morning): a note dated today, an exact duplicate
+  // NPS row, a claimed web lead, and a call date typed in the future.
+  x.gas.now = d(2026, 11, 4, 10, 0);
+  setCell(x.gas, x.ulTr, '11.9.26', (r) => r[0] === P.ivy.lastFirst, 6, '11/3 lm [MARI]\n11/4 lm again [MARI]');
+  appendNps(x.gas, x.nov, 'EW', { date: d(2026, 11, 4), takenBy: 'Emily', p: P.xan });
+  appendNps(x.gas, x.nov, 'EW', { date: d(2026, 11, 4), takenBy: 'Emily', p: P.xan });
+  appendNps(x.gas, x.nov, 'EW', { date: d(2026, 11, 4, 2, 10), takenBy: 'Auto/Emily', p: P.tam });
+  appendNps(x.gas, x.nov, 'BR', { date: d(2026, 11, 12), takenBy: 'Damian', p: P.sol });
+  run(x, d(2026, 11, 4, 15, 0), true);
+  // After it starts: a note dated today, a live NPS entry whose name is then corrected.
+  x.gas.now = d(2026, 11, 4, 15, 20);
+  setCell(x.gas, x.ulTr, '11.9.26', (r) => r[0] === P.jo.lastFirst, 6, '11/4 sched f/u [MARI]');
+  appendNps(x.gas, x.nov, 'SMST', { date: d(2026, 11, 4), takenBy: 'Somerset', p: P.rae });
+  run(x, d(2026, 11, 4, 15, 30));
+  c.backfillAt(d(2026, 11, 4, 15, 40));
+  const bf = () => activity(x).filter((r) => r[12]);
+  check('install-day notes typed before the start are backfilled; ones seen live are not', () => {
+    const notes = activity(x).filter((r) => r[3] === 'UL' && r[1] === 'Mariela Ponce');
+    assert.strictEqual(notes.length, 3, notes.map((r) => r[5] + ' ' + r[12]).join('\n'));
+    assert.strictEqual(notes.filter((r) => !r[12]).length, 1);
+  });
+  check('exact duplicate NPS rows are backfilled once', () => {
+    assert.strictEqual(bf().filter((r) => r[1] === 'Emily Freire' && r[4] === 'New patient on the NPS').length, 1);
+  });
+  check('a backfilled claimed web lead is date-only (claim time unknown)', () => {
+    const e = bf().find((r) => r[8] === 'claimed_lead');
+    assert(e && e[12] === 'date', e && e.join('|'));
+  });
+  check('a future-typo call date already on the sheet is backfilled to the start day', () => {
+    const e = bf().find((r) => r[1] === "Damian O'Loughlin" && r[3] === 'NPS');
+    assert(e && /call Wed 11\/4/.test(e[5]), e && e[5]);
+  });
+  x.gas.now = d(2026, 11, 4, 15, 50);
+  setCell(x.gas, x.nov, 'SMST', (r) => r[3] === P.rae.full, 4, P.rae.full + 'y');
+  SENSITIVE.push(P.rae.full + 'y');
+  run(x, d(2026, 11, 4, 16, 0));
+  x.gas.now = d(2026, 11, 4, 16, 5);
+  setCell(x.gas, x.nov, 'SMST', (r) => r[3] === P.rae.full + 'y', 10, d(2026, 11, 13));
+  run(x, d(2026, 11, 4, 16, 15));
+  check('a corrected name keeps its credit: the IE booked later still counts', () => {
+    assert(activity(x).some((r) => r[8] === 'ie_booked' && r[1] === 'Alexa Quintanilla'));
+  });
+  const before = activity(x).length;
+  c.backfillAt(d(2026, 11, 4, 16, 20));
+  check('re-running backfill doesn\'t re-add the corrected row', () => assert.strictEqual(activity(x).length, before));
+
+  // A late October entry typed on 11/5 is credited live; after 11/10 October leaves scope.
+  x.gas.now = d(2026, 11, 5, 9, 0);
+  appendNps(x.gas, x.oct, 'TR', { date: d(2026, 10, 31), takenBy: 'Mariela', p: P.fay });
+  run(x, d(2026, 11, 5, 9, 15));
+  const lateOct = activity(x).find((r) => r[3] === 'NPS' && !r[12] && /nps-oct/.test(r[11]) && r[1] === 'Mariela Ponce');
+  run(x, d(2026, 11, 12, 9, 0));
+  c.backfillAt(d(2026, 11, 12, 9, 30));
+  check('re-running backfill after the 10th doesn\'t duplicate last month\'s live entries', () => {
+    assert(lateOct, 'live October entry missing');
+    assert.strictEqual(activity(x).filter((r) => r[11] === lateOct[11]).length, 1);
+  });
+  const dec = x.gas.addSpreadsheet('nps-dec', 'December 2026 New Patient Spreadsheet');
+  npsTab(dec, 'TR', 'TOMS RIVER', []);
+  const octRows = activity(x).filter((r) => r[12] && r[0] < d(2026, 11, 1)).length;
+  c.backfillAt(d(2026, 12, 11, 9, 0));
+  check('a December re-run (from 12/1 back to 11/1) keeps October\'s backfilled rows', () => {
+    assert(octRows > 0);
+    assert.strictEqual(activity(x).filter((r) => r[12] && r[0] < d(2026, 11, 1)).length, octRows);
+  });
+  const rowsNow = activity(x).length;
+  x.gas.failOpen['ul-met'] = 5;
+  let threw = false;
+  try { c.backfillAt(d(2026, 12, 11, 9, 30)); } catch (e) { threw = /nothing was changed/.test(e.message); }
+  x.gas.failOpen['ul-met'] = 0;
+  check('if a source can\'t be read, backfill stops and changes nothing', () => {
+    assert(threw);
+    assert.strictEqual(activity(x).length, rowsNow);
+  });
+}
+
+console.log('\nWeb app access');
+{
+  const fsx = require('fs');
+  const src = fsx.readFileSync(require('path').join(__dirname, '..', 'Code.gs'), 'utf8');
+  check('only the entry points are public; every helper ends in "_"', () => {
+    const pub = [...src.matchAll(/^function (\w+)/gm)].map((m) => m[1]).filter((n) => !n.endsWith('_')).sort();
+    assert.deepStrictEqual(pub, ['backfill', 'doGet', 'forgetOutputSheet', 'getDashboardData', 'installTrigger',
+      'removeTriggers', 'resetSnapshots', 'runNow', 'runWatch', 'setup']);
+  });
+  const x = buildWorld();
+  REGRESSION_WORLDS.push(x);
+  run(x, d(2026, 11, 4, 7, 5), true);
+  x.code.installTrigger();
+  x.gas.activeUser = 'someone.else@example.test';
+  const refused = ['backfill', 'removeTriggers', 'resetSnapshots', 'forgetOutputSheet', 'installTrigger', 'runNow', 'setup']
+    .filter((fn) => { try { x.code[fn](); return false; } catch (e) { return /Only the owner/.test(e.message); } });
+  check('a dashboard visitor can\'t run the admin functions', () => {
+    assert.strictEqual(refused.length, 7, refused.join(','));
+    assert.strictEqual(x.gas.triggers.length, 1);
+    assert(x.gas.props.PCC_WATCH_OUTPUT_ID);
+  });
+  check('a dashboard visitor can read the dashboard; runWatch does nothing for them', () => {
+    assert(x.code.getDashboardData(1).clinics.length === 9);
+    const before = JSON.stringify(x.gas.files[x.gas.props.PCC_WATCH_STATE_FILE_ID].content).length;
+    x.gas.now = d(2026, 11, 4, 9, 0);
+    x.code.runWatch();
+    assert.strictEqual(JSON.stringify(x.gas.files[x.gas.props.PCC_WATCH_STATE_FILE_ID].content).length, before);
+  });
+  x.gas.activeUser = '';
+  check('the trigger (no visible user) still runs; admin functions still refuse', () => {
+    let threw = false;
+    try { x.code.backfill(); } catch (e) { threw = true; }
+    assert(threw);
+  });
+  x.gas.activeUser = undefined;
 }
 
 console.log('\nPrivacy');

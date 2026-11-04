@@ -132,8 +132,10 @@ the log.
    log prints the sheet's link.
 6. **Deploy → New deployment →** gear icon **→ Web app**:
    - **Execute as:** Me
-   - **Who has access:** Only myself. Pick "Anyone within Trinity Rehab" only
-     if you want to share the page with, say, Danielle.
+   - **Who has access:** Only myself. "Anyone within Trinity Rehab" is also
+     safe if you want to share the page, say with Danielle: visitors can only
+     read the dashboard, and the admin functions refuse anyone but you.
+     **Don't pick "Anyone"**: that puts PCC activity on the open web.
 
    Click **Deploy** and bookmark the URL it gives you (on your phone too).
    That's your dashboard. From now on the emails link to it. After changing

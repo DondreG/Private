@@ -15,12 +15,16 @@ const CODE = fs.readFileSync(path.join(__dirname, '..', 'Code.gs'), 'utf8');
 const EXPORTS = ['CONFIG', 'setup', 'runWatchAt', 'runWatch', 'resetSnapshots', 'getOutputSpreadsheet',
   'ensureTabs', 'getSecret', 'loadState', 'installTrigger', 'removeTriggers', 'signatureTags',
   'normalizeName', 'attributeTakenBy', 'parseUlTabDate', 'npsMonths', 'mondayOf', 'loadRoster', 'reasonWord',
-  'dashboardData', 'todayModel', 'doGet', 'getDashboardData', 'backfillAt', 'noteLineDate'];
+  'dashboardData', 'todayModel', 'doGet', 'getDashboardData', 'backfillAt', 'noteLineDate',
+  'backfill', 'forgetOutputSheet', 'runNow'];
 
 /** Loads Code.gs with the fake services as its globals (same realm, so instanceof Date works). */
 function loadCode(gas) {
   const names = Object.keys(gas.context);
-  const factory = new Function(...names, CODE + '\nreturn {' + EXPORTS.join(',') + '};');
+  // Helpers end in "_" (private to Apps Script); tests reach them by their plain name.
+  const defined = new Set([...CODE.matchAll(/^function (\w+)/gm)].map((m) => m[1]));
+  const pairs = EXPORTS.map((n) => (defined.has(n) || n === 'CONFIG' ? n : n + ': ' + n + '_'));
+  const factory = new Function(...names, CODE + '\nreturn {' + pairs.join(',') + '};');
   return factory(...names.map((n) => gas.context[n]));
 }
 

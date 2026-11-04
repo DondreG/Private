@@ -259,6 +259,7 @@ function createGas(opts) {
       Session: {
         getScriptTimeZone: () => tzDefault,
         getEffectiveUser: () => ({ getEmail: () => 'dondre.test@example.test' }),
+        getActiveUser: () => ({ getEmail: () => (gas.activeUser === undefined ? 'dondre.test@example.test' : gas.activeUser) }),
       },
       PropertiesService: {
         getScriptProperties: () => ({
